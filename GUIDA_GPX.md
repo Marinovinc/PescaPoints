@@ -13,6 +13,8 @@ I punti calcolati e salvati in PescaPoints (hot spot fascia ~1000 m, struttura d
    - Su **telefono/tablet**: si apre la condivisione del sistema → scegli l'app del navigatore (ActiveCaptain, Navionics) oppure **Salva su File**.
    - Su **PC**: viene scaricato un file `.gpx`.
 
+> ⚠️ **Sul PC non aprire il file con doppio clic.** Il `.gpx` è un file da **trasferire al navigatore**, non da visualizzare: col doppio clic Windows potrebbe avviare un programma qualsiasi associato ai `.gpx` (es. *GPX Animator*, che crea video di tracce e non c'entra nulla — per questo "non succede niente"). Trasferiscilo con i passi sotto. Per controllarne solo il contenuto: clic destro → **Apri con → Blocco note**.
+
 Nomi dei waypoint nel file:
 - `PPF01, PPF02, ...` → punti sulla **fascia ~1000 m**
 - `PPS01, ...` → **struttura** del fondale (scarpate/secche)
