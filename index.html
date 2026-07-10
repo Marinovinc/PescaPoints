@@ -72,7 +72,7 @@
 <div id="sheet" class="min">
   <div id="grip"></div>
   <div id="tabs">
-    <div class="tab on" data-tab="solunar">☾ Solunar</div>
+    <div class="tab on" data-tab="solunar">🎣 Pesca</div>
     <div class="tab" data-tab="point">📍 Punto</div>
     <div class="tab" data-tab="list">☰ Punti</div>
   </div>
@@ -168,6 +168,83 @@ function moonInfo(dstr){
 }
 function todayStr(){const d=new Date(),p=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());}
 
+/* ---- FINESTRE DI PESCA (stile Windy: solunar + meteo reali Open-Meteo, stima pesata) ---- */
+const PEZO={ major:0.40, moon:0.22, press:0.22, wind:0.16 };   // pesi trasparenti (somma 1)
+let fcstCache={key:'',data:null};
+function gauss(x,s){ return Math.exp(-0.5*(x/s)*(x/s)); }
+function clamp01(x){ return x<0?0:x>1?1:x; }
+function hoursOf(iso){ const t=String(iso).slice(11,16).split(':'); return (+t[0])+(+t[1])/60; }  // ora locale da "YYYY-MM-DDTHH:MM"
+function hm(x){ let h=Math.floor(x), m=Math.round((x-h)*60); if(m===60){h++;m=0;} return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0'); }
+function moonTransits(dstr){   // approssimazione: transito superiore luna ~ mezzogiorno + ritardo lunare (~50 min/giorno)
+  const m=moonInfo(dstr); if(!m) return [12,0.42];
+  const lag=(parseFloat(m.age)/29.530588853)*24.84;
+  const up=(12+lag)%24, low=(up+12.42)%24;
+  return [up,low];
+}
+async function loadForecast(lat,lon){
+  const key=lat.toFixed(2)+','+lon.toFixed(2);
+  if(fcstCache.key===key && fcstCache.data) return fcstCache.data;
+  const url='https://api.open-meteo.com/v1/forecast?latitude='+lat.toFixed(3)+'&longitude='+lon.toFixed(3)+
+    '&hourly=pressure_msl,wind_speed_10m,temperature_2m&daily=sunrise,sunset&timezone=auto&forecast_days=7';
+  const r=await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status);
+  const j=await r.json(); fcstCache={key,data:j}; return j;
+}
+function scoreDays(j){
+  const H=j.hourly, D=j.daily, out=[];
+  const press=H.pressure_msl, wind=H.wind_speed_10m, times=H.time;
+  for(let d=0; d<D.time.length; d++){
+    const dstr=D.time[d];
+    const majors=[hoursOf(D.sunrise[d]), hoursOf(D.sunset[d]), ...moonTransits(dstr)];
+    const mn=moonInfo(dstr), fMoon=0.6+0.4*(Math.abs(mn.illum-50)/50);
+    const hourly=[]; let sumP=0,sumW=0,nH=0;
+    for(let h=0; h<times.length; h++){
+      if(times[h].slice(0,10)!==dstr) continue;
+      const hr=hoursOf(times[h]);
+      let fMaj=0; for(const e of majors){ let dt=Math.abs(hr-e); dt=Math.min(dt,24-dt); fMaj=Math.max(fMaj,gauss(dt,1.2)); }
+      const p=press[h], fPband=gauss(p-1016,10);   // banda pressione selettiva
+      const dp=p-(h>=3?press[h-3]:p), fTrend=(dp<0&&dp>-4)?0.15:0;   // lieve calo pressione = bonus
+      const fPress=clamp01(fPband+fTrend);
+      const w=wind[h], fWind=Math.max(0.15, 1-Math.pow((w-11)/16,2));   // vento moderato ideale, forte penalizzato
+      const s=clamp01(PEZO.major*fMaj+PEZO.moon*fMoon+PEZO.press*fPress+PEZO.wind*fWind);
+      hourly.push([hr,s]); sumP+=fPress; sumW+=fWind; nH++;
+    }
+    if(!nH) continue;
+    // % del GIORNO (discrimina i giorni): luna + pressione media + vento medio. Alba/tramonto ci sono ogni giorno,
+    // quindi NON entrano nella % giornaliera ma solo nella scelta della fascia oraria qui sotto.
+    const dayQ=clamp01(0.40*fMoon + 0.35*(sumP/nH) + 0.25*(sumW/nH));
+    // fascia migliore + barre: dal punteggio ORARIO (mostra QUANDO nel giorno)
+    let mx=0,mxh=12; hourly.forEach(([hr,s])=>{ if(s>mx){mx=s;mxh=hr;} });
+    const thr=0.85*mx, byHr={}; hourly.forEach(([hr,s])=>{ const k=Math.round(hr); if(byHr[k]==null||s>byHr[k]) byHr[k]=s; });
+    let lo=Math.round(mxh), hi=Math.round(mxh);
+    for(let hh=Math.round(mxh); hh>=0; hh--){ if((byHr[hh]||0)>=thr) lo=hh; else break; }
+    for(let hh=Math.round(mxh); hh<=23; hh++){ if((byHr[hh]||0)>=thr) hi=hh; else break; }
+    const blk=[0,0,0,0], blkN=[0,0,0,0];
+    hourly.forEach(([hr,s])=>{ const b=Math.min(3,Math.floor(hr/6)); blk[b]+=s; blkN[b]++; });
+    // curva gamma 1.5: lascia spazio in basso -> settimane scarse ~30-50%, ottime ~85-95% (non appiattisce tutto sul 95)
+    out.push({ date:dstr, pct:Math.round(100*Math.pow(dayQ,1.5)), lo, hi, blocks:blk.map((v,i)=>blkN[i]?v/blkN[i]:0) });
+  }
+  return out;
+}
+function pctColor(p){ return p>=70?'#22e07a':p>=50?'#ffd166':p>=32?'#ff9a3c':'#ff5b5b'; }
+async function renderForecast(){
+  const el=document.getElementById('fcstBody'); if(!el) return;
+  const ctr=map.getCenter();
+  try{
+    const days=scoreDays(await loadForecast(ctr.lat,ctr.lng));
+    if(!days.length){ el.textContent='Nessun dato disponibile.'; return; }
+    const dow=['dom','lun','mar','mer','gio','ven','sab'];
+    el.innerHTML=days.map(d=>{
+      const dt=new Date(d.date+'T12:00'), lbl=dow[dt.getDay()]+' '+d.date.slice(8,10)+'/'+d.date.slice(5,7);
+      const bmax=Math.max.apply(null,d.blocks)||1;
+      const bar=d.blocks.map(b=>{ const t=b/bmax; return '<span style="display:inline-block;width:15px;height:9px;border-radius:2px;margin-right:2px;background:'+pctColor(Math.round(t*100))+';opacity:'+(0.3+0.7*t).toFixed(2)+'"></span>'; }).join('');
+      return '<div class="row" style="margin:6px 0"><div style="width:64px" class="muted">'+lbl+'</div>'+
+        '<div style="width:46px"><b style="color:'+pctColor(d.pct)+'">'+d.pct+'%</b></div>'+
+        '<div style="width:92px" class="muted">'+hm(d.lo)+'–'+hm(d.hi)+'</div>'+
+        '<div title="notte/mattina/pomeriggio/sera">'+bar+'</div></div>';
+    }).join('')+'<div class="hint" style="margin-top:6px">Barre = notte / mattina / pomeriggio / sera. Posizione = centro mappa ('+ctr.lat.toFixed(2)+', '+ctr.lng.toFixed(2)+'): sposta la mappa e riapri per aggiornare.</div>';
+  }catch(e){ el.innerHTML='<span class="warn">Meteo non disponibile ('+esc(e.message)+'). Serve connessione internet.</span>'; }
+}
+
 /* ---- BOTTOM SHEET ---- */
 const sheet=document.getElementById('sheet'), body=document.getElementById('sheetBody');
 let curTab='solunar', selDate=todayStr(), selIdx=-1, selT='hist';
@@ -187,10 +264,11 @@ function render(){
     body.innerHTML=
       '<div class="row" style="margin:4px 0 8px"><input type="date" id="solDate" value="'+selDate+'"><div class="sp"></div><button class="tab" style="flex:none;padding:8px 12px" id="solToday">Oggi</button></div>'+
       '<div class="card"><div class="row"><div style="font-size:40px;margin-right:6px">'+m.emoji+'</div><div><div class="big">'+m.illum+'%</div><div class="lbl">'+m.ph+' &middot; '+m.age+' giorni</div></div></div><div style="margin-top:8px">'+spr+'</div></div>'+
-      '<div class="card"><div class="lbl">Finestra oraria favorevole</div><div class="big" style="font-size:20px">09:00 – 14:00 <span class="muted" style="font-size:14px">(picco ~11:00)</span></div><div class="muted">ripresa 15:00 – 17:00</div><div class="hint">Dalle catture storiche di alalunga (26 orari; luna su 6 date). <b>Ipotesi da validare</b>, non regola certa.</div></div>'+
+      '<div class="card" id="fcstCard"><div class="lbl">Finestre di pesca — prossimi 7 giorni <span class="muted">(stima)</span></div><div id="fcstBody" class="muted" style="margin-top:6px">Carico meteo…</div><div class="hint">Stima pesata: solunar (alba/tramonto/transito luna) 40%, fase luna 22%, pressione 22%, vento 16%. Meteo reale Open-Meteo. <b>Non è una certezza</b>, è un aiuto alla scelta.</div></div>'+
       '<div class="card"><div class="lbl">Regola zona</div>Qui i pelagici si prendono <b>sempre negli stessi punti</b>: attiva 🔥 <b>Zone calde</b> per vederli. I modelli meteo-marini non li predicono — contano i <b>tuoi mark</b>.</div>';
     const di=document.getElementById('solDate'); if(di) di.onchange=e=>{selDate=e.target.value;render();};
     const bt=document.getElementById('solToday'); if(bt) bt.onclick=()=>{selDate=todayStr();render();};
+    renderForecast();
   } else if(curTab==='point'){
     if(selIdx<0){ body.innerHTML='<div class="card muted">Tocca un punto sulla mappa, oppure premi ➕ (o tieni premuto sulla mappa) per aggiungere un tuo punto.</div>'; return; }
     if(selT==='user'){
