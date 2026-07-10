@@ -355,7 +355,7 @@ function drawSpots(){
   savedSpots.forEach(sp=>{
     const fascia=sp.t==='fascia', col=fascia?'#ff4d4d':(sp.rise>3?'#ffd166':'#22c8ff');
     const label=fascia?'Punto fascia ~1000 m':(sp.rise>3?'Secca / rialzo':'Scarpata / struttura');
-    L.circleMarker([sp.la,sp.lo],{radius:5,color:'#06121f',weight:1.5,fillColor:col,fillOpacity:.95,className:'catchMk'})
+    L.circleMarker([sp.la,sp.lo],{radius:9,color:'#ffffff',weight:2.5,fillColor:col,fillOpacity:1,className:'catchMk'})
       .addTo(spotLayer)
       .bindPopup('<b>'+label+'</b><br>Prof. ~'+Math.abs(Math.round(sp.z))+' m'+(sp.slope!=null?' &middot; pendenza '+Math.round(sp.slope*100)+'%':'')+
         '<br><span style="color:#9fb4c9;font-size:12px">Suggerito, non cattura garantita.</span>'+
