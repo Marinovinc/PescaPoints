@@ -48,6 +48,8 @@
   .catchMk{filter:drop-shadow(0 0 3px #000)}
   #legend{position:fixed;left:10px;bottom:96px;z-index:900;background:#0d2137d8;border:1px solid var(--line);border-radius:8px;
     padding:6px 9px;font-size:11px;color:var(--dim);display:none}
+  #toast{position:fixed;left:50%;top:64px;transform:translateX(-50%);z-index:1200;background:#0d2137f2;border:1px solid var(--line);
+    border-radius:10px;padding:8px 14px;font-size:13px;color:var(--txt);box-shadow:0 4px 14px #0009;display:none;max-width:86vw;text-align:center}
 </style>
 </head>
 <body>
@@ -64,10 +66,12 @@
   <div class="fab" id="btnBathy" title="Carta nautica (isobate + segnalamenti)">≈</div>
   <div class="fab" id="btnCatch" title="Catture">🐟</div>
   <div class="fab" id="btnHeat" title="Zone calde">🔥</div>
+  <div class="fab" id="btnSpot" title="Hot spot suggeriti (struttura del fondale)">🎯</div>
   <div class="fab" id="btnAdd" title="Aggiungi un tuo punto" style="background:#1c5a3a;border-color:#2c8a5a">➕</div>
 </div>
 
 <div id="legend"></div>
+<div id="toast"></div>
 
 <div id="sheet" class="min">
   <div id="grip"></div>
@@ -95,6 +99,9 @@ const SPLBL={tonno:'Tonno',alalunga:'Alalunga',spada:'Pesce spada',foraggio:'For
 /* ---- I TUOI punti (catch-log editabile, salvato sul telefono) ---- */
 let userPts=[]; try{ userPts=JSON.parse(localStorage.getItem('pescapoints_user')||'[]'); }catch(e){}
 function saveUser(){ try{ localStorage.setItem('pescapoints_user', JSON.stringify(userPts)); }catch(e){} }
+/* VERSIONE PUBBLICA: su GitHub Pages (o qualsiasi host non-locale) i waypoint personali (CATCH) sono nascosti
+   dalla mappa, dalla lista e dalle zone calde. In locale (localhost) restano visibili solo a te. */
+const PUBLIC = !/^(localhost|127\.0\.0\.1|\[::1\])$/i.test(location.hostname);
 
 /* ---- MAPPA ---- */
 const ISCHIA=[40.62,13.60];
@@ -121,7 +128,7 @@ let bathyOn=true; chart.addTo(map);   // carta nautica ON di default
 const catchLayer=L.layerGroup().addTo(map);
 function drawCatch(){
   catchLayer.clearLayers();
-  CATCH.forEach((c,i)=>{
+  if(!PUBLIC) CATCH.forEach((c,i)=>{   // waypoint storici personali: solo in locale, mai nella versione pubblica
     const pel=(c.sp==='alalunga'||c.sp==='tonno'||c.sp==='spada');
     L.circleMarker([c.la,c.lo],{radius:pel?7:4,color:'#08111f',weight:1,fillColor:SPCOL[c.sp]||'#b8c6d6',fillOpacity:.95,className:'catchMk'})
       .addTo(catchLayer).on('click',()=>selectPoint('hist',i));
@@ -143,7 +150,7 @@ function drawHeat(){
   let cells=[],dmax=0;
   for(let a=0;a<N;a++)for(let k=0;k<N;k++){
     const lat=b.getSouth()+(b.getNorth()-b.getSouth())*(a+.5)/N, lon=b.getWest()+(b.getEast()-b.getWest())*(k+.5)/N;
-    let d=0; for(const c of CATCH.concat(userPts)){const dl=c.la-lat,dg=(c.lo-lon)*cosLat,r2=(dl*dl+dg*dg)/(bw*bw); d+=(W[c.sp]||.25)*Math.exp(-.5*r2);}
+    let d=0; for(const c of (PUBLIC?userPts:CATCH.concat(userPts))){const dl=c.la-lat,dg=(c.lo-lon)*cosLat,r2=(dl*dl+dg*dg)/(bw*bw); d+=(W[c.sp]||.25)*Math.exp(-.5*r2);}
     if(d>dmax)dmax=d; cells.push([lat,lon,d]);
   }
   if(!dmax) return;
@@ -251,6 +258,81 @@ async function renderForecast(){
   }catch(e){ el.innerHTML='<span class="warn">Meteo non disponibile ('+esc(e.message)+'). Serve connessione internet.</span>'; }
 }
 
+/* ---- HOT SPOT SUGGERITI (struttura del fondale EMODnet: scarpate/secche, NON catture) ---- */
+const spotLayer=L.layerGroup().addTo(map);
+let toastT=null;
+function toast(msg,ms){ const t=document.getElementById('toast'); t.innerHTML=msg; t.style.display='block';
+  if(toastT)clearTimeout(toastT); toastT=setTimeout(()=>{t.style.display='none';}, ms||2600); }
+let geotiffLoading=null;
+function loadGeotiff(){
+  if(window.GeoTIFF) return Promise.resolve();
+  if(geotiffLoading) return geotiffLoading;
+  geotiffLoading=new Promise((res,rej)=>{ const s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/geotiff@2.1.3/dist-browser/geotiff.js'; s.onload=()=>res(); s.onerror=()=>rej(new Error('libreria non caricata'));
+    document.head.appendChild(s); });
+  return geotiffLoading;
+}
+const WCS_URL='https://ows.emodnet-bathymetry.eu/wcs?service=WCS&version=2.0.1&request=GetCoverage&coverageId=emodnet__mean&format=image/tiff';
+async function fetchDepthGrid(latS,latN,lonW,lonE,maxpx){
+  const NR=0.0010416666667, sf=Math.min(maxpx/((lonE-lonW)/NR), maxpx/((latN-latS)/NR), 1).toFixed(4);
+  const url=WCS_URL+'&subset=Lat('+latS+','+latN+')&subset=Long('+lonW+','+lonE+')&scalefactor='+sf;
+  const r=await fetch(url); if(!r.ok) throw new Error('WCS HTTP '+r.status);
+  const tiff=await GeoTIFF.fromArrayBuffer(await r.arrayBuffer()), img=await tiff.getImage();
+  const data=(await img.readRasters())[0]; let nd=null; try{nd=img.getGDALNoData();}catch(_){}
+  if(nd!=null) for(let k=0;k<data.length;k++){ if(data[k]===nd) data[k]=NaN; }
+  return {W:img.getWidth(),H:img.getHeight(),data,latS,latN,lonW,lonE};
+}
+function rankSpots(g){
+  const {W,H,data,latS,latN,lonW,lonE}=g;
+  const cosLat=Math.cos((latS+latN)/2*Math.PI/180), dLat=(latN-latS)/H, dLon=(lonE-lonW)/W;
+  const dyM=dLat*111320, dxM=dLon*111320*cosLat;   // metri per cella
+  const cand=[];
+  for(let r=1;r<H-1;r++) for(let c=1;c<W-1;c++){
+    const z=data[r*W+c]; if(!(z<-3 && z>-2500)) continue;   // in acqua, non abisso
+    const zl=data[r*W+c-1],zr=data[r*W+c+1],zu=data[(r-1)*W+c],zd=data[(r+1)*W+c];
+    if(![zl,zr,zu,zd].every(isFinite)) continue;
+    const dzdx=(zr-zl)/(2*dxM), dzdy=(zd-zu)/(2*dyM), slope=Math.sqrt(dzdx*dzdx+dzdy*dzdy);
+    const rise=z-(zl+zr+zu+zd)/4;   // >0 = piu' alto dei vicini = rialzo/secca
+    // riga 0 del raster = nord (latN): lat = latN - (r+0.5)*dLat
+    const lat=latN-(r+0.5)*dLat, lon=lonW+(c+0.5)*dLon;
+    cand.push({lat,lon,z,slope,rise,score:slope+(rise>0?rise*0.02:0)});
+  }
+  cand.sort((a,b)=>b.score-a.score);
+  const span=Math.max(latN-latS,lonE-lonW), minD=span/7, picked=[];
+  for(const s of cand){ if(picked.length>=8) break;
+    if(picked.every(p=>{const dl=p.lat-s.lat,dg=(p.lon-s.lon)*cosLat; return Math.sqrt(dl*dl+dg*dg)>minD;})) picked.push(s);
+  }
+  return picked;
+}
+function spotNav(la,lo){ navTo2(la,lo); return false; }
+function drawSpot(sp){
+  const slopePct=Math.round(sp.slope*100);
+  const type = sp.rise>3?'Secca / rialzo' : (slopePct>=8?'Scarpata ripida':'Struttura di fondale');
+  const col  = sp.rise>3?'#ffd166':'#22c8ff';
+  L.circleMarker([sp.lat,sp.lon],{radius:9,color:col,weight:2,fillColor:col,fillOpacity:.22,dashArray:'3 3',className:'catchMk'})
+    .addTo(spotLayer)
+    .bindPopup('<b>'+type+'</b><br>Prof. ~'+Math.abs(Math.round(sp.z))+' m &middot; pendenza '+slopePct+'%'+
+      '<br><span style="color:#9fb4c9;font-size:12px">Suggerito dalla <b>struttura del fondale</b>, non una cattura garantita.</span>'+
+      '<br><a href="#" style="color:#8df0ff" onclick="return spotNav('+sp.lat.toFixed(5)+','+sp.lon.toFixed(5)+')">🧭 Vai qui</a>');
+}
+let spotBusy=false;
+async function computeHotSpots(){
+  if(spotBusy) return; spotBusy=true;
+  const b=map.getBounds(), latS=b.getSouth(),latN=b.getNorth(),lonW=b.getWest(),lonE=b.getEast();
+  if(Math.max(latN-latS,lonE-lonW)>0.9){ toast('Zooma di più: area troppo grande per proporre hot spot.'); spotBusy=false; return; }
+  toast('Analizzo la struttura del fondale…', 8000);
+  try{
+    await loadGeotiff();
+    const spots=rankSpots(await fetchDepthGrid(latS,latN,lonW,lonE,90));
+    spotLayer.clearLayers();
+    if(!spots.length){ toast('Nessuna struttura evidente in quest\'area.'); spotBusy=false; return; }
+    spots.forEach(drawSpot);
+    document.getElementById('btnSpot').style.background='#173a5c';
+    toast('🎯 '+spots.length+' hot spot suggeriti dalla struttura del fondale (scarpate/secche). Non sono catture.', 4000);
+  }catch(err){ toast('Hot spot non disponibili: '+esc(err.message)+' (serve connessione).'); }
+  spotBusy=false;
+}
+
 /* ---- BOTTOM SHEET ---- */
 const sheet=document.getElementById('sheet'), body=document.getElementById('sheetBody');
 let curTab='solunar', selDate=todayStr(), selIdx=-1, selT='hist';
@@ -271,7 +353,9 @@ function render(){
       '<div class="row" style="margin:4px 0 8px"><input type="date" id="solDate" value="'+selDate+'"><div class="sp"></div><button class="tab" style="flex:none;padding:8px 12px" id="solToday">Oggi</button></div>'+
       '<div class="card"><div class="row"><div style="font-size:40px;margin-right:6px">'+m.emoji+'</div><div><div class="big">'+m.illum+'%</div><div class="lbl">'+m.ph+' &middot; '+m.age+' giorni</div></div></div><div style="margin-top:8px">'+spr+'</div></div>'+
       '<div class="card" id="fcstCard"><div class="lbl">Finestre di pesca — prossimi 7 giorni <span class="muted">(stima)</span></div><div id="fcstBody" class="muted" style="margin-top:6px">Carico meteo…</div><div class="hint">Stima pesata: solunar (alba/tramonto/transito luna) 40%, fase luna 22%, pressione 22%, vento 16%. Meteo reale Open-Meteo. <b>Non è una certezza</b>, è un aiuto alla scelta.</div></div>'+
-      '<div class="card"><div class="lbl">Regola zona</div>Qui i pelagici si prendono <b>sempre negli stessi punti</b>: attiva 🔥 <b>Zone calde</b> per vederli. I modelli meteo-marini non li predicono — contano i <b>tuoi mark</b>.</div>';
+      (PUBLIC
+        ? '<div class="card"><div class="lbl">Hot spot dell\'area</div>Premi 🎯 per proporre i punti su <b>scarpate e secche</b> del fondale nell\'area inquadrata: è dove la conformazione concentra foraggio e predatori. <b>Suggerimenti dalla struttura</b>, non catture garantite.</div>'
+        : '<div class="card"><div class="lbl">Regola zona</div>Qui i pelagici si prendono <b>sempre negli stessi punti</b>: attiva 🔥 <b>Zone calde</b> per vederli. I modelli meteo-marini non li predicono — contano i <b>tuoi mark</b>. Premi 🎯 per gli hot spot di struttura.</div>');
     const di=document.getElementById('solDate'); if(di) di.onchange=e=>{selDate=e.target.value;render();};
     const bt=document.getElementById('solToday'); if(bt) bt.onclick=()=>{selDate=todayStr();render();};
     renderForecast();
@@ -298,11 +382,15 @@ function render(){
     let h='';
     if(userPts.length){ h+='<div class="lbl" style="margin-top:4px;color:#7ff0ad">★ I tuoi punti ('+userPts.length+')</div>';
       userPts.forEach((c,i)=>{ h+='<div class="card" style="padding:8px 12px;margin:5px 0" onclick="selectPoint(\'user\','+i+')"><div class="row"><span class="dot" style="background:'+(SPCOL[c.sp]||'#8cff3b')+';box-shadow:0 0 0 2px #fff"></span>'+esc(c.nm)+'<div class="sp"></div><span class="muted">›</span></div></div>'; }); }
-    const groups={}; CATCH.forEach((c,i)=>{(groups[c.sp]=groups[c.sp]||[]).push(i);});
-    ['tonno','alalunga','spada','foraggio','mark'].forEach(sp=>{ if(!groups[sp])return;
-      h+='<div class="lbl" style="margin-top:8px"><span class="dot" style="background:'+SPCOL[sp]+'"></span> '+SPLBL[sp]+' ('+groups[sp].length+')</div>';
-      groups[sp].slice(0,60).forEach(i=>{ h+='<div class="card" style="padding:8px 12px;margin:5px 0" onclick="selectPoint(\'hist\','+i+')"><div class="row">'+esc(CATCH[i].nm)+'<div class="sp"></div><span class="muted">›</span></div></div>'; });
-    });
+    if(!PUBLIC){   // catalogo waypoint storici: solo in locale, mai nella versione pubblica
+      const groups={}; CATCH.forEach((c,i)=>{(groups[c.sp]=groups[c.sp]||[]).push(i);});
+      ['tonno','alalunga','spada','foraggio','mark'].forEach(sp=>{ if(!groups[sp])return;
+        h+='<div class="lbl" style="margin-top:8px"><span class="dot" style="background:'+SPCOL[sp]+'"></span> '+SPLBL[sp]+' ('+groups[sp].length+')</div>';
+        groups[sp].slice(0,60).forEach(i=>{ h+='<div class="card" style="padding:8px 12px;margin:5px 0" onclick="selectPoint(\'hist\','+i+')"><div class="row">'+esc(CATCH[i].nm)+'<div class="sp"></div><span class="muted">›</span></div></div>'; });
+      });
+    } else if(!userPts.length){
+      h+='<div class="card muted">Aggiungi i tuoi punti con ➕ (o tieni premuto sulla mappa). Premi 🎯 per gli <b>hot spot</b> di struttura nell\'area inquadrata.</div>';
+    }
     body.innerHTML=h;
   }
 }
@@ -319,6 +407,7 @@ document.getElementById('btnHeat').onclick=e=>{ heatOn=!heatOn; if(heatOn){drawH
   document.getElementById('legend').style.display=heatOn?'block':'none';
   document.getElementById('legend').innerHTML='🔥 Zone calde: densità dei tuoi mark (giallo→rosso)'; };
 map.on('moveend',()=>{ if(heatOn) drawHeat(); });
+document.getElementById('btnSpot').onclick=()=>computeHotSpots();
 let watchId=null, meMarker=null, meCircle=null, meCentered=false;
 function showMe(p){ const ll=[p.coords.latitude,p.coords.longitude], acc=Math.max(0,p.coords.accuracy||0);
   if(!meMarker){
@@ -349,6 +438,8 @@ document.getElementById('btnAdd').onclick=()=>addUserPoint(map.getCenter());
 map.on('contextmenu', e=>addUserPoint(e.latlng));
 
 render();
+/* versione pubblica: proponi subito gli hot spot per l'area iniziale */
+if(PUBLIC){ map.whenReady(()=>setTimeout(computeHotSpots, 900)); }
 /* service worker */
 if('serviceWorker' in navigator){ navigator.serviceWorker.register('sw.js').catch(()=>{}); }
 </script>
