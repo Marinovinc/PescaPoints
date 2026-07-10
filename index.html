@@ -444,7 +444,11 @@ function render(){
         '<div style="margin-top:8px"><span class="pill" onclick="navTo2('+c.la+','+c.lo+')">🧭 Vai qui</span><span class="pill" onclick="map.setView(['+c.la+','+c.lo+'],14)">🔍 Zoom</span></div></div>';
     }
   } else {
-    let h='';
+    let h='<div class="card"><div class="row"><b>Manda i punti al navigatore</b></div>'+
+      '<div class="muted" style="font-size:12px;margin:4px 0 8px">Esporta gli hot spot memorizzati e i tuoi punti in un file <b>GPX</b> (Garmin ActiveCaptain / Navionics / scheda SD).</div>'+
+      '<div><span class="pill" style="background:#1c5a3a;border-color:#2c8a5a" id="btnGpx">⬇️ Esporta GPX</span>'+
+      '<span class="pill" id="btnGuide">❔ Guida invio al navigatore</span></div>'+
+      '<div id="guideBox" style="display:none;margin-top:8px;font-size:13px;line-height:1.55"></div></div>';
     if(userPts.length){ h+='<div class="lbl" style="margin-top:4px;color:#7ff0ad">★ I tuoi punti ('+userPts.length+')</div>';
       userPts.forEach((c,i)=>{ h+='<div class="card" style="padding:8px 12px;margin:5px 0" onclick="selectPoint(\'user\','+i+')"><div class="row"><span class="dot" style="background:'+(SPCOL[c.sp]||'#8cff3b')+';box-shadow:0 0 0 2px #fff"></span>'+esc(c.nm)+'<div class="sp"></div><span class="muted">›</span></div></div>'; }); }
     if(!PUBLIC){   // catalogo waypoint storici: solo in locale, mai nella versione pubblica
@@ -457,9 +461,58 @@ function render(){
       h+='<div class="card muted">Aggiungi i tuoi punti con ➕ (o tieni premuto sulla mappa). Premi 🎯 per gli <b>hot spot</b> di struttura nell\'area inquadrata.</div>';
     }
     body.innerHTML=h;
+    const bg=document.getElementById('btnGpx'); if(bg) bg.onclick=exportGPX;
+    const bgd=document.getElementById('btnGuide'); if(bgd) bgd.onclick=()=>{ const g=document.getElementById('guideBox'); if(!g.innerHTML) g.innerHTML=GUIDE_HTML; g.style.display=g.style.display==='none'?'block':'none'; };
   }
 }
 function navTo2(la,lo){window.open('https://www.google.com/maps/dir/?api=1&destination='+la+','+lo,'_blank');}
+
+/* ---- EXPORT GPX (per navigatori Garmin/Navionics) ---- */
+function buildGPX(pts){
+  const x=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
+  let g='<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="PescaPoints" xmlns="http://www.topografix.com/GPX/1/1">\n';
+  pts.forEach(p=>{ g+='<wpt lat="'+p.la.toFixed(6)+'" lon="'+p.lo.toFixed(6)+'"><name>'+x(p.name)+'</name>'+
+    (p.desc?'<desc>'+x(p.desc)+'</desc>':'')+'<sym>'+x(p.sym||'Waypoint')+'</sym></wpt>\n'; });
+  return g+'</gpx>\n';
+}
+function collectGpxPoints(){
+  const pts=[], pad=n=>String(n).padStart(2,'0');
+  savedSpots.forEach((s,i)=>{ const isF=s.t==='fascia';
+    pts.push({la:s.la,lo:s.lo,name:'PP'+(isF?'F':'S')+pad(i+1),
+      desc:(isF?'Fascia ~1000 m':'Struttura fondale')+' - prof ~'+Math.abs(Math.round(s.z))+' m'+(s.slope!=null?', pendenza '+Math.round(s.slope*100)+'%':''),
+      sym:'Fishing Hot Spot'}); });
+  userPts.forEach((c,i)=>{ pts.push({la:c.la,lo:c.lo,name:'PPU'+pad(i+1),desc:(SPLBL[c.sp]||'')+(c.nm?' - '+c.nm:''),sym:'Fishing Hot Spot'}); });
+  if(!PUBLIC) CATCH.forEach((c,i)=>{ pts.push({la:c.la,lo:c.lo,name:'PPC'+pad(i+1),desc:(SPLBL[c.sp]||'')+(c.nm?' - '+c.nm:''),sym:'Fish'}); });
+  return pts;
+}
+async function exportGPX(){
+  const pts=collectGpxPoints();
+  if(!pts.length){ toast('Nessun punto da esportare: premi 🔥/🎯 o aggiungi i tuoi punti con ➕.'); return; }
+  const gpx=buildGPX(pts), fname='pescapoints_'+pts.length+'punti.gpx';
+  const blob=new Blob([gpx],{type:'application/gpx+xml'});
+  try{
+    const file=new File([blob],fname,{type:'application/gpx+xml'});
+    if(navigator.canShare && navigator.canShare({files:[file]})){   // telefono/tablet -> condividi ad ActiveCaptain
+      await navigator.share({files:[file],title:'PescaPoints GPX',text:pts.length+' waypoint per il navigatore'});
+      toast(pts.length+' punti condivisi (scegli ActiveCaptain o Salva su File).'); return;
+    }
+  }catch(e){ if(e && e.name==='AbortError') return; /* utente annulla -> fine */ }
+  // fallback (PC o niente condivisione file): scarica il file
+  const url=URL.createObjectURL(blob), a=document.createElement('a');
+  a.href=url; a.download=fname; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),3000);
+  toast(pts.length+' punti esportati: '+fname);
+}
+const GUIDE_HTML=
+ '<b>1) Esporta</b><br>Premi <b>⬇️ Esporta GPX</b>. Su <b>telefono/tablet</b> si apre la condivisione (scegli l\'app del navigatore o "Salva su File"); su <b>PC</b> scarica un file <code>.gpx</code>.<br><br>'+
+ '<b>2) Garmin con WiFi — app ActiveCaptain</b><br>'+
+ '&bull; Installa <b>Garmin ActiveCaptain</b> e abbina il plotter (sul plotter: Impostazioni &rarr; Stazione/WiFi).<br>'+
+ '&bull; Collega il telefono alla <b>rete WiFi del plotter</b>.<br>'+
+ '&bull; Condividi/apri il file GPX in ActiveCaptain &rarr; <b>Importa dati utente</b>.<br>'+
+ '&bull; In ActiveCaptain premi <b>Sincronizza</b>: i waypoint passano al plotter via WiFi.<br><br>'+
+ '<b>Alternativa senza WiFi — scheda SD</b><br>Copia il <code>.gpx</code> nella cartella <code>Garmin/GPX</code> della microSD, inseriscila nel plotter &rarr; <b>Info utente / Gestisci dati &rarr; Importa</b>.<br><br>'+
+ '<b>Navionics o altri plotter</b><br>Importa lo stesso GPX nell\'app <b>Navionics Boating</b> (Menu &rarr; Importa) e sincronizza col plotter compatibile.<br><br>'+
+ '<span class="muted">Nomi: PPF=fascia, PPS=struttura, PPU=tuoi punti, PPC=catture. Alcuni plotter accorciano i nomi e usano un\'icona di default.</span>';
 
 /* ---- FAB ---- */
 const baseOrder=['mare','sat','osm'];
