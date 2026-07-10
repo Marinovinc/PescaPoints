@@ -99,13 +99,15 @@ function saveUser(){ try{ localStorage.setItem('pescapoints_user', JSON.stringif
 /* ---- MAPPA ---- */
 const ISCHIA=[40.62,13.60];
 const map=L.map('map',{zoomControl:false,attributionControl:true,tap:true}).setView(ISCHIA,11);
+map.createPane('bathy'); map.getPane('bathy').style.zIndex=250;
+map.getPane('bathy').style.filter='brightness(1.45) contrast(1.15) saturate(1.4)';   // fondale piu' luminoso -> rilievi piu' leggibili
 const bases={
   sat:L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'&copy; Esri, Maxar'}),
   osm:L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap'})
 };
 let baseKey='sat'; bases.sat.addTo(map);
-const bathy=L.tileLayer.wms('https://ows.emodnet-bathymetry.eu/wms',{layers:'emodnet:mean_multicolour',format:'image/png',transparent:true,opacity:0.5,attribution:'&copy; EMODnet Bathymetry'});
-let bathyOn=false;
+const bathy=L.tileLayer.wms('https://ows.emodnet-bathymetry.eu/wms',{layers:'emodnet:mean_multicolour',format:'image/png',transparent:true,opacity:0.72,pane:'bathy',attribution:'&copy; EMODnet Bathymetry'});
+let bathyOn=true; bathy.addTo(map);   // batimetria ON di default (fondale luminoso)
 
 /* ---- MARKER CATTURE ---- */
 const catchLayer=L.layerGroup().addTo(map);
@@ -225,6 +227,7 @@ document.getElementById('btnBase').onclick=()=>{ map.removeLayer(bases[baseKey])
 document.getElementById('btnBathy').onclick=e=>{ bathyOn=!bathyOn; if(bathyOn){bathy.addTo(map);} else map.removeLayer(bathy); e.currentTarget.style.background=bathyOn?'#173a5c':'#0d2137e6'; };
 document.getElementById('btnCatch').onclick=e=>{ catchOn=!catchOn; if(catchOn){drawCatch();catchLayer.addTo(map);} else map.removeLayer(catchLayer); e.currentTarget.style.background=catchOn?'#173a5c':'#0d2137e6'; };
 document.getElementById('btnCatch').style.background='#173a5c';
+document.getElementById('btnBathy').style.background='#173a5c';
 document.getElementById('btnHeat').onclick=e=>{ heatOn=!heatOn; if(heatOn){drawHeat();heatLayer.addTo(map);} else map.removeLayer(heatLayer); e.currentTarget.style.background=heatOn?'#173a5c':'#0d2137e6';
   document.getElementById('legend').style.display=heatOn?'block':'none';
   document.getElementById('legend').innerHTML='🔥 Zone calde: densità dei tuoi mark (giallo→rosso)'; };
