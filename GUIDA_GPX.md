@@ -33,7 +33,10 @@ Nomi dei waypoint nel file:
 
 ---
 
-## 3) Alternativa senza WiFi — scheda SD (microSD)
+## 3) Da PC — scheda SD (microSD)
+
+> **Nota:** Garmin ActiveCaptain è **solo per telefono/tablet** (iOS/Android): **non esiste una versione desktop**. Da computer il metodo è la scheda SD.
+
 
 1. Copia il file `.gpx` nella cartella **`Garmin/GPX`** della microSD.
 2. Inserisci la SD nel plotter.
