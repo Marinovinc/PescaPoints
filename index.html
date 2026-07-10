@@ -67,6 +67,7 @@
   <div class="fab" id="btnCatch" title="Catture">🐟</div>
   <div class="fab" id="btnHeat" title="Zone calde">🔥</div>
   <div class="fab" id="btnSpot" title="Hot spot suggeriti (struttura del fondale)">🎯</div>
+  <div class="fab" id="btnExport" title="Esporta i punti al navigatore (GPX)">📤</div>
   <div class="fab" id="btnAdd" title="Aggiungi un tuo punto" style="background:#1c5a3a;border-color:#2c8a5a">➕</div>
 </div>
 
@@ -524,6 +525,7 @@ document.getElementById('btnBathy').style.background='#173a5c';
 /* 🔥 = calcola i punti della fascia ~1000 m nell'area vista e li MEMORIZZA (restano a ogni zoom). Long-press = pulisci. */
 document.getElementById('btnHeat').onclick=()=>computeHotZones();
 document.getElementById('btnSpot').onclick=()=>computeHotSpots();
+document.getElementById('btnExport').onclick=()=>exportGPX();
 document.getElementById('btnHeat').oncontextmenu=e=>{ e.preventDefault(); clearSpotsUI(); };
 document.getElementById('btnSpot').oncontextmenu=e=>{ e.preventDefault(); clearSpotsUI(); };
 let watchId=null, meMarker=null, meCircle=null, meCentered=false;
