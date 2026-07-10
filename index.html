@@ -99,6 +99,9 @@ const SPLBL={tonno:'Tonno',alalunga:'Alalunga',spada:'Pesce spada',foraggio:'For
 /* ---- I TUOI punti (catch-log editabile, salvato sul telefono) ---- */
 let userPts=[]; try{ userPts=JSON.parse(localStorage.getItem('pescapoints_user')||'[]'); }catch(e){}
 function saveUser(){ try{ localStorage.setItem('pescapoints_user', JSON.stringify(userPts)); }catch(e){} }
+/* punti suggeriti calcolati e MEMORIZZATI (fascia ~1000 m + struttura), persistono e si mostrano a ogni zoom */
+let savedSpots=[]; try{ savedSpots=JSON.parse(localStorage.getItem('pescapoints_spots')||'[]'); }catch(e){}
+function saveSpots(){ try{ localStorage.setItem('pescapoints_spots', JSON.stringify(savedSpots)); }catch(e){} }
 /* VERSIONE PUBBLICA: su GitHub Pages (o qualsiasi host non-locale) i waypoint personali (CATCH) sono nascosti
    dalla mappa, dalla lista e dalle zone calde. In locale (localhost) restano visibili solo a te. */
 const PUBLIC = !/^(localhost|127\.0\.0\.1|\[::1\])$/i.test(location.hostname);
@@ -156,26 +159,28 @@ function publicZones(){
 /* ---- ZONE CALDE per REGOLA: fascia di profondità dove concentri le catture. Vale in QUALSIASI area visibile. ----
    Regola ricavata dalle 71 catture reali: profondità p10-p90 = 949-1190 m, mediana ~1021 m;
    la pendenza NON è risultata distintiva (catture come il fondale medio) -> conta la PROFONDITA', non la scarpata. */
-const HOTZONE={ d0:-1020, sigma:115, cap:700 };   // centro fascia, larghezza (~±115 m), max celle disegnate
-const heatLayer=L.layerGroup(); let heatOn=false, hzBusy=false, hzTimer=null;
-async function computeHotZones(){
-  if(!heatOn||hzBusy) return; hzBusy=true;
+const HOTZONE={ d0:-1020, sigma:115 };   // fascia di profondità dove concentri le catture (~1000 m, larghezza ±115 m)
+let hzBusy=false;
+async function computeHotZones(){   // estrae PUNTI puntuali sulla fascia (non una macchia) e li MEMORIZZA
+  if(hzBusy) return; hzBusy=true;
   const b=map.getBounds(), latS=b.getSouth(),latN=b.getNorth(),lonW=b.getWest(),lonE=b.getEast();
-  if(Math.max(latN-latS,lonE-lonW)>1.2){ toast('Zooma di più per calcolare le zone calde.'); heatLayer.clearLayers(); hzBusy=false; return; }
-  toast('Calcolo zone calde (fascia ~1000 m)…',7000);
+  if(Math.max(latN-latS,lonE-lonW)>1.0){ toast('Zooma di più per i punti della fascia ~1000 m.'); hzBusy=false; return; }
+  toast('Calcolo i punti sulla fascia ~1000 m…',7000);
   try{
     await loadGeotiff();
-    const g=await fetchDepthGrid(latS,latN,lonW,lonE,72);
-    const {W,H,data}=g, dLat=(g.latN-g.latS)/H, dLon=(g.lonE-g.lonW)/W, cells=[];
+    const g=await fetchDepthGrid(latS,latN,lonW,lonE,80);
+    const {W,H,data}=g, dLat=(g.latN-g.latS)/H, dLon=(g.lonE-g.lonW)/W;
+    const cosLat=Math.cos((g.latS+g.latN)/2*Math.PI/180), cand=[];
     for(let r=0;r<H;r++)for(let c=0;c<W;c++){ const z=data[r*W+c]; if(!(z<-3)) continue;
-      const sc=Math.exp(-0.5*Math.pow((z-HOTZONE.d0)/HOTZONE.sigma,2)); if(sc<0.4) continue;
-      cells.push([g.latN-(r+0.5)*dLat, g.lonW+(c+0.5)*dLon, sc]); }
-    cells.sort((a,b)=>b[2]-a[2]);
-    heatLayer.clearLayers();
-    cells.slice(0,HOTZONE.cap).forEach(([lat,lon,sc])=>{ const col=sc>0.8?'#ff2828':(sc>0.6?'#ff8c1e':'#ffe066');
-      L.rectangle([[lat-dLat/2,lon-dLon/2],[lat+dLat/2,lon+dLon/2]],{stroke:false,fillColor:col,fillOpacity:0.12+0.33*sc,className:'catchMk'}).addTo(heatLayer); });
-    toast(cells.length? '🔥 Zone calde = fascia ~1000 m (regola dalle tue catture).' : 'Nessuna fascia ~1000 m in quest\'area.', 3500);
-  }catch(err){ toast('Zone calde non disponibili: '+esc(err.message)); }
+      const sc=Math.exp(-0.5*Math.pow((z-HOTZONE.d0)/HOTZONE.sigma,2)); if(sc<0.6) continue;   // solo vicino ai ~1000 m
+      cand.push({lat:g.latN-(r+0.5)*dLat, lon:g.lonW+(c+0.5)*dLon, z, sc}); }
+    cand.sort((a,b)=>b.sc-a.sc);
+    const minD=0.013, picked=[];   // ~1.4 km tra i punti -> puntuali
+    for(const p of cand){ if(picked.length>=30) break;
+      if(picked.every(q=>{const dl=q.lat-p.lat,dg=(q.lon-p.lon)*cosLat; return Math.sqrt(dl*dl+dg*dg)>minD;})) picked.push(p); }
+    const added=addSpots(picked.map(p=>({la:+p.lat.toFixed(5),lo:+p.lon.toFixed(5),z:p.z,t:'fascia'})));
+    toast(added? '🔥 '+added+' punti sulla fascia ~1000 m (memorizzati, restano a ogni zoom).' : 'Fascia ~1000 m già coperta qui.', 3500);
+  }catch(err){ toast('Punti fascia non disponibili: '+esc(err.message)); }
   hzBusy=false;
 }
 /* zone storiche sfocate (solo pubblico): marcano dove hai gia' preso, senza i punti esatti (verdi, distinte dalla fascia) */
@@ -331,34 +336,49 @@ function rankSpots(g){
   return picked;
 }
 function spotNav(la,lo){ navTo2(la,lo); return false; }
-function drawSpot(sp){
-  const slopePct=Math.round(sp.slope*100);
-  const type = sp.rise>3?'Secca / rialzo' : (slopePct>=8?'Scarpata ripida':'Struttura di fondale');
-  const col  = sp.rise>3?'#ffd166':'#22c8ff';
-  L.circleMarker([sp.lat,sp.lon],{radius:9,color:col,weight:2,fillColor:col,fillOpacity:.22,dashArray:'3 3',className:'catchMk'})
-    .addTo(spotLayer)
-    .bindPopup('<b>'+type+'</b><br>Prof. ~'+Math.abs(Math.round(sp.z))+' m &middot; pendenza '+slopePct+'%'+
-      '<br><span style="color:#9fb4c9;font-size:12px">Suggerito dalla <b>struttura del fondale</b>, non una cattura garantita.</span>'+
-      '<br><a href="#" style="color:#8df0ff" onclick="return spotNav('+sp.lat.toFixed(5)+','+sp.lon.toFixed(5)+')">🧭 Vai qui</a>');
+/* --- punti suggeriti MEMORIZZATI (fascia ~1000 m + struttura): salvati su localStorage e mostrati a OGNI zoom --- */
+function addSpots(arr){ let added=0;
+  for(const s of arr){ if(savedSpots.length>=400) break;
+    if(savedSpots.some(e=>Math.abs(e.la-s.la)<0.006 && Math.abs(e.lo-s.lo)<0.006)) continue;   // dedup ~0.6 km
+    savedSpots.push(s); added++; }
+  saveSpots(); drawSpots(); updateSpotLegend(); return added;
+}
+function delSpot(la,lo){ savedSpots=savedSpots.filter(s=>!(Math.abs(s.la-la)<1e-4&&Math.abs(s.lo-lo)<1e-4)); saveSpots(); drawSpots(); updateSpotLegend(); return false; }
+function clearSpotsUI(){ if(savedSpots.length && confirm('Cancellare i '+savedSpots.length+' punti suggeriti memorizzati?')){ savedSpots=[]; saveSpots(); drawSpots(); updateSpotLegend(); } return false; }
+function updateSpotLegend(){ const lg=document.getElementById('legend');
+  if(savedSpots.length){ lg.style.display='block';
+    lg.innerHTML='🔴 fascia ~1000 m &middot; 🔵 struttura &middot; <b>'+savedSpots.length+'</b> punti &middot; <a href="#" style="color:#8df0ff" onclick="return clearSpotsUI()">🗑 pulisci</a>'; }
+  else lg.style.display='none';
+}
+function drawSpots(){
+  spotLayer.clearLayers();
+  savedSpots.forEach(sp=>{
+    const fascia=sp.t==='fascia', col=fascia?'#ff4d4d':(sp.rise>3?'#ffd166':'#22c8ff');
+    const label=fascia?'Punto fascia ~1000 m':(sp.rise>3?'Secca / rialzo':'Scarpata / struttura');
+    L.circleMarker([sp.la,sp.lo],{radius:5,color:'#06121f',weight:1.5,fillColor:col,fillOpacity:.95,className:'catchMk'})
+      .addTo(spotLayer)
+      .bindPopup('<b>'+label+'</b><br>Prof. ~'+Math.abs(Math.round(sp.z))+' m'+(sp.slope!=null?' &middot; pendenza '+Math.round(sp.slope*100)+'%':'')+
+        '<br><span style="color:#9fb4c9;font-size:12px">Suggerito, non cattura garantita.</span>'+
+        '<br><a href="#" style="color:#8df0ff" onclick="return spotNav('+sp.la.toFixed(5)+','+sp.lo.toFixed(5)+')">🧭 Vai</a> &middot; '+
+        '<a href="#" style="color:#ff9a9a" onclick="return delSpot('+sp.la.toFixed(5)+','+sp.lo.toFixed(5)+')">🗑 togli</a>');
+  });
 }
 let spotBusy=false;
-async function computeHotSpots(){
+async function computeHotSpots(){   // struttura (scarpate/secche): punti puntuali, MEMORIZZATI
   if(spotBusy) return; spotBusy=true;
   const b=map.getBounds(); let latS=b.getSouth(),latN=b.getNorth(),lonW=b.getWest(),lonE=b.getEast();
-  if(PUBLIC){   // limita gli hot spot all'area di pesca reale (niente scarpate a nord/ovest fuori zona)
+  if(PUBLIC){   // struttura limitata all'area di pesca reale (niente scarpate a nord/ovest fuori zona)
     latS=Math.max(latS,CATCHBB.s); latN=Math.min(latN,CATCHBB.n); lonW=Math.max(lonW,CATCHBB.w); lonE=Math.min(lonE,CATCHBB.e);
-    if(latN-latS<0.01||lonE-lonW<0.01){ toast('Sposta la vista sull\'area di pesca (SW di Ischia) per gli hot spot.'); spotBusy=false; return; }
+    if(latN-latS<0.01||lonE-lonW<0.01){ toast('Sposta la vista sull\'area di pesca (SW di Ischia) per la struttura.'); spotBusy=false; return; }
   }
-  if(Math.max(latN-latS,lonE-lonW)>0.9){ toast('Zooma di più: area troppo grande per proporre hot spot.'); spotBusy=false; return; }
+  if(Math.max(latN-latS,lonE-lonW)>0.9){ toast('Zooma di più per gli hot spot di struttura.'); spotBusy=false; return; }
   toast('Analizzo la struttura del fondale…', 8000);
   try{
     await loadGeotiff();
     const spots=rankSpots(await fetchDepthGrid(latS,latN,lonW,lonE,90));
-    spotLayer.clearLayers();
     if(!spots.length){ toast('Nessuna struttura evidente in quest\'area.'); spotBusy=false; return; }
-    spots.forEach(drawSpot);
-    document.getElementById('btnSpot').style.background='#173a5c';
-    toast('🎯 '+spots.length+' hot spot suggeriti dalla struttura del fondale (scarpate/secche). Non sono catture.', 4000);
+    const added=addSpots(spots.map(s=>({la:+s.lat.toFixed(5),lo:+s.lon.toFixed(5),z:s.z,slope:s.slope,rise:s.rise,t:'struttura'})));
+    toast(added? '🎯 '+added+' hot spot di struttura (memorizzati, restano a ogni zoom).' : 'Struttura già coperta qui.', 3500);
   }catch(err){ toast('Hot spot non disponibili: '+esc(err.message)+' (serve connessione).'); }
   spotBusy=false;
 }
@@ -383,7 +403,7 @@ function render(){
       '<div class="row" style="margin:4px 0 8px"><input type="date" id="solDate" value="'+selDate+'"><div class="sp"></div><button class="tab" style="flex:none;padding:8px 12px" id="solToday">Oggi</button></div>'+
       '<div class="card"><div class="row"><div style="font-size:40px;margin-right:6px">'+m.emoji+'</div><div><div class="big">'+m.illum+'%</div><div class="lbl">'+m.ph+' &middot; '+m.age+' giorni</div></div></div><div style="margin-top:8px">'+spr+'</div></div>'+
       '<div class="card" id="fcstCard"><div class="lbl">Finestre di pesca — prossimi 7 giorni <span class="muted">(stima)</span></div><div id="fcstBody" class="muted" style="margin-top:6px">Carico meteo…</div><div class="hint">Stima pesata: solunar (alba/tramonto/transito luna) 40%, fase luna 22%, pressione 22%, vento 16%. Meteo reale Open-Meteo. <b>Non è una certezza</b>, è un aiuto alla scelta.</div></div>'+
-      '<div class="card"><div class="lbl">Regola zone calde</div>Dalle tue 71 catture: si concentrano nella <b>fascia ~1000 m</b> di profondità (949–1190 m), <b>non</b> sulle scarpate. Premi 🔥 per vedere quella fascia <b>in qualsiasi area</b> della cartina (si ricalcola quando sposti la mappa).'+
+      '<div class="card"><div class="lbl">Regola zone calde</div>Dalle tue 71 catture: si concentrano nella <b>fascia ~1000 m</b> di profondità (949–1190 m), <b>non</b> sulle scarpate. Premi 🔥 per calcolare i <b>punti puntuali</b> su quella fascia nell\'area vista: restano <b>memorizzati a ogni zoom</b> (long-press 🔥/🎯 per pulirli).'+
         (PUBLIC
           ? ' 🟢 le zone verdi sfocate marcano dove hai già preso; 🎯 aggiunge le strutture del fondale.'
           : ' 🎯 aggiunge scarpate/secche; i tuoi mark restano i punti certi.')+
@@ -435,13 +455,11 @@ document.getElementById('btnBathy').onclick=e=>{ bathyOn=!bathyOn; if(bathyOn){c
 document.getElementById('btnCatch').onclick=e=>{ catchOn=!catchOn; if(catchOn){drawCatch();catchLayer.addTo(map);} else map.removeLayer(catchLayer); e.currentTarget.style.background=catchOn?'#173a5c':'#0d2137e6'; };
 document.getElementById('btnCatch').style.background='#173a5c';
 document.getElementById('btnBathy').style.background='#173a5c';
-document.getElementById('btnHeat').onclick=e=>{ heatOn=!heatOn;
-  if(heatOn){ heatLayer.addTo(map); computeHotZones(); } else { map.removeLayer(heatLayer); heatLayer.clearLayers(); }
-  e.currentTarget.style.background=heatOn?'#173a5c':'#0d2137e6';
-  const lg=document.getElementById('legend'); lg.style.display=heatOn?'block':'none';
-  lg.innerHTML='🔥 Zone calde = fascia ~1000 m (regola dalle tue catture) &middot; vale ovunque sposti la mappa'; };
-map.on('moveend',()=>{ if(heatOn){ clearTimeout(hzTimer); hzTimer=setTimeout(computeHotZones,500); } });
+/* 🔥 = calcola i punti della fascia ~1000 m nell'area vista e li MEMORIZZA (restano a ogni zoom). Long-press = pulisci. */
+document.getElementById('btnHeat').onclick=()=>computeHotZones();
 document.getElementById('btnSpot').onclick=()=>computeHotSpots();
+document.getElementById('btnHeat').oncontextmenu=e=>{ e.preventDefault(); clearSpotsUI(); };
+document.getElementById('btnSpot').oncontextmenu=e=>{ e.preventDefault(); clearSpotsUI(); };
 let watchId=null, meMarker=null, meCircle=null, meCentered=false;
 function showMe(p){ const ll=[p.coords.latitude,p.coords.longitude], acc=Math.max(0,p.coords.accuracy||0);
   if(!meMarker){
@@ -472,13 +490,11 @@ document.getElementById('btnAdd').onclick=()=>addUserPoint(map.getCenter());
 map.on('contextmenu', e=>addUserPoint(e.latlng));
 
 render();
-/* versione pubblica: zone storiche sfocate (verdi) sempre visibili + hot spot ristretti all'area.
-   Le 🔥 zone calde per regola (fascia ~1000 m) restano su richiesta (tasto 🔥), valgono ovunque sposti la mappa. */
+drawSpots(); updateSpotLegend();   // ridisegna i punti suggeriti gia' memorizzati (a ogni zoom)
+/* versione pubblica: zone storiche sfocate (verdi) sempre visibili; struttura+fascia calcolate una volta se non gia' presenti */
 if(PUBLIC){
   drawPublicZones(); zoneLayer.addTo(map);
-  const lg=document.getElementById('legend'); lg.style.display='block';
-  lg.innerHTML='🟢 Zone storiche (sfocate) &middot; 🎯 struttura &middot; 🔥 fascia ~1000 m';
-  map.whenReady(()=>setTimeout(computeHotSpots, 900));
+  if(!savedSpots.length) map.whenReady(()=>setTimeout(()=>{ computeHotSpots(); }, 900));
 }
 /* service worker */
 if('serviceWorker' in navigator){ navigator.serviceWorker.register('sw.js').catch(()=>{}); }
