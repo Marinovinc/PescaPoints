@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#06121f">
+<title>PescaPoints — punti di pesca</title>
+<link rel="stylesheet" href="lib/leaflet.css">
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+  :root{ --bg:#06121f; --panel:#0d2137; --line:#1c3556; --txt:#eaf2fa; --dim:#9fb4c9; --acc:#22c8ff; }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font:15px/1.45 system-ui,Segoe UI,Roboto,sans-serif;overflow:hidden}
+  #map{position:absolute;inset:0;background:#0a1a2c}
+  /* top bar */
+  #top{position:fixed;top:0;left:0;right:0;height:52px;display:flex;align-items:center;gap:8px;padding:0 12px;
+    background:linear-gradient(#06121fdd,#06121f99 70%,#06121f00);z-index:1000;pointer-events:none}
+  #top .brand{font-weight:800;font-size:18px;letter-spacing:.3px;pointer-events:auto}
+  #top .brand small{font-weight:500;color:var(--dim);font-size:11px;display:block;margin-top:-3px}
+  #top .sp{flex:1}
+  .fab{pointer-events:auto;width:40px;height:40px;border-radius:50%;border:1px solid var(--line);background:#0d2137e6;
+    color:var(--txt);font-size:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 3px 10px #0007}
+  /* right side floating column */
+  #tools{position:fixed;right:10px;top:60px;z-index:1000;display:flex;flex-direction:column;gap:9px}
+  /* bottom sheet */
+  #sheet{position:fixed;left:0;right:0;bottom:0;z-index:1000;background:var(--panel);border-top:1px solid var(--line);
+    border-radius:16px 16px 0 0;box-shadow:0 -6px 24px #0009;transition:transform .28s ease;max-height:74vh;overflow:hidden;
+    padding-bottom:env(safe-area-inset-bottom)}
+  #sheet.min{transform:translateY(calc(100% - 82px))}
+  #grip{height:26px;display:flex;align-items:center;justify-content:center;cursor:pointer}
+  #grip::before{content:"";width:40px;height:5px;border-radius:3px;background:#3a5a7a}
+  #sheetHead{display:flex;align-items:center;gap:10px;padding:0 16px 8px}
+  #sheetHead h3{margin:0;font-size:16px} #sheetHead .sp{flex:1}
+  #tabs{display:flex;gap:6px;padding:0 12px 8px}
+  .tab{flex:1;text-align:center;padding:8px;border-radius:9px;background:#11243c;border:1px solid var(--line);color:var(--dim);font-weight:700;font-size:13px;cursor:pointer}
+  .tab.on{background:#173a5c;color:#dff1ff;border-color:#2c6b8a}
+  #sheetBody{padding:2px 16px 18px;overflow:auto;max-height:56vh}
+  .card{background:#0b1d31;border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:8px 0}
+  .row{display:flex;align-items:center;gap:8px} .muted{color:var(--dim)} .sp{flex:1}
+  .big{font-size:26px;font-weight:800} .lbl{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+  .dot{width:12px;height:12px;border-radius:50%;display:inline-block;border:1px solid #06121f}
+  .pill{display:inline-block;background:#12304f;border:1px solid var(--line);border-radius:20px;padding:3px 10px;font-size:12px;margin:2px 4px 2px 0}
+  .good{color:#7ff0ad;font-weight:700} .warn{color:#ffcf85}
+  input[type=date]{background:#11243c;border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:6px 8px;font-size:14px}
+  .hint{font-size:11px;color:var(--dim);margin-top:6px}
+  .catchMk{filter:drop-shadow(0 0 3px #000)}
+  #legend{position:fixed;left:10px;bottom:96px;z-index:900;background:#0d2137d8;border:1px solid var(--line);border-radius:8px;
+    padding:6px 9px;font-size:11px;color:var(--dim);display:none}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="top">
+  <div class="brand">🎣 PescaPoints<small>punti di pesca &middot; Mediterraneo</small></div>
+  <div class="sp"></div>
+</div>
+
+<div id="tools">
+  <div class="fab" id="btnLocate" title="La mia posizione">◎</div>
+  <div class="fab" id="btnBase" title="Cambia sfondo">🛰</div>
+  <div class="fab" id="btnBathy" title="Batimetria">≈</div>
+  <div class="fab" id="btnCatch" title="Catture">🐟</div>
+  <div class="fab" id="btnHeat" title="Zone calde">🔥</div>
+  <div class="fab" id="btnAdd" title="Aggiungi un tuo punto" style="background:#1c5a3a;border-color:#2c8a5a">➕</div>
+</div>
+
+<div id="legend"></div>
+
+<div id="sheet" class="min">
+  <div id="grip"></div>
+  <div id="tabs">
+    <div class="tab on" data-tab="solunar">☾ Solunar</div>
+    <div class="tab" data-tab="point">📍 Punto</div>
+    <div class="tab" data-tab="list">☰ Punti</div>
+  </div>
+  <div id="sheetBody"></div>
+</div>
+
+<script src="lib/leaflet.js"></script>
+<script>
+"use strict";
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+/* ---- dati catture (Ischia/Forio) - fonte Forio_2026/_catch_campo.js. sp=specie, nm=nome/data ---- */
+const CATCH=[
+ {la:40.60206,lo:13.67960,sp:"mark",nm:"8 BELL 1350"},{la:40.57027,lo:13.59220,sp:"foraggio",nm:"Foraggio"},{la:40.53075,lo:13.59761,sp:"mark",nm:"Rott 230617"},{la:40.48970,lo:13.61045,sp:"mark",nm:"Waypoint 351"},{la:40.57335,lo:13.61848,sp:"mark",nm:"Waypoint 352"},{la:40.61445,lo:13.62821,sp:"mark",nm:"Waypoint 353"},{la:40.71244,lo:13.61057,sp:"mark",nm:"Waypoint 354"},{la:40.54412,lo:13.60287,sp:"mark",nm:"Waypoint 355"},{la:40.56793,lo:13.61747,sp:"mark",nm:"Waypoint 356"},{la:40.60409,lo:13.64949,sp:"mark",nm:"Waypoint 357"},{la:40.53979,lo:13.58909,sp:"mark",nm:"Waypoint 358"},{la:40.55309,lo:13.57572,sp:"mark",nm:"Waypoint 359"},{la:40.60687,lo:13.62598,sp:"mark",nm:"Waypoint 360"},{la:40.51598,lo:13.62355,sp:"mark",nm:"Waypoint 361"},{la:40.58524,lo:13.59396,sp:"mark",nm:"Waypoint 362"},{la:40.54652,lo:13.61544,sp:"mark",nm:"Waypoint 364"},{la:40.58624,lo:13.59700,sp:"mark",nm:"Waypoint 365"},{la:40.55657,lo:13.68090,sp:"mark",nm:"Waypoint 367"},{la:40.53210,lo:13.62798,sp:"mark",nm:"Waypoint 368"},{la:40.53449,lo:13.59905,sp:"mark",nm:"Waypoint 473"},{la:40.59385,lo:13.58948,sp:"mark",nm:"Waypoint 488"},
+ {la:40.58657,lo:13.59633,sp:"alalunga",nm:"ALA 150619 13:00"},{la:40.58622,lo:13.59507,sp:"tonno",nm:"TS 150619 14:00"},{la:40.58377,lo:13.61522,sp:"alalunga",nm:"ALA 150619 15:50"},{la:40.53933,lo:13.60213,sp:"alalunga",nm:"ALA 150619 17:25"},{la:40.59446,lo:13.63411,sp:"alalunga",nm:"ALA 160619 07:10"},{la:40.60427,lo:13.51230,sp:"spada",nm:"AVV SP 160619 08"},{la:40.53383,lo:13.60211,sp:"alalunga",nm:"ALA 260619 1600"},
+ {la:40.61875,lo:13.65275,sp:"mark",nm:"STK"},{la:40.60237,lo:13.70463,sp:"mark",nm:"32 STK QUARTA"},{la:40.61272,lo:13.70706,sp:"mark",nm:"32 QUARTA"},{la:40.56034,lo:13.69734,sp:"mark",nm:"28 STR 1030"},{la:40.59573,lo:13.69014,sp:"mark",nm:"5 GINO"},{la:40.60407,lo:13.71298,sp:"mark",nm:"2 BOTT 1045"},{la:40.62384,lo:13.62853,sp:"mark",nm:"39 CAT  1043"},{la:40.60902,lo:13.70615,sp:"mark",nm:"39 PISACANE 1120"},{la:40.57361,lo:13.62714,sp:"mark",nm:"19 CAT 1125"},{la:40.60902,lo:13.66339,sp:"mark",nm:"18 CAT 1130"},{la:40.62292,lo:13.60137,sp:"mark",nm:"40 CAT 1140"},{la:40.59191,lo:13.59334,sp:"mark",nm:"37 CAT 1145"},{la:40.59379,lo:13.59061,sp:"mark",nm:"Waypoint 487"},{la:40.62353,lo:13.54543,sp:"mark",nm:"Waypoint 489"},{la:40.58337,lo:13.70473,sp:"mark",nm:"16 AG 1155"},{la:40.62014,lo:13.63704,sp:"mark",nm:"29 TRIST 1205"},{la:40.59326,lo:13.53692,sp:"mark",nm:"7 PUCCI 1207"},{la:40.58584,lo:13.70838,sp:"mark",nm:"43 STR 1250"},{la:40.62411,lo:13.68948,sp:"mark",nm:"47 1500"},{la:40.56293,lo:13.69394,sp:"mark",nm:"40 DSTR 1623"},{la:40.60838,lo:13.70399,sp:"mark",nm:"30 Str 1130"},{la:40.59989,lo:13.68616,sp:"mark",nm:"26 Str 1630"},{la:40.56295,lo:13.61968,sp:"mark",nm:"9 Str 1635"},{la:40.59350,lo:13.72085,sp:"mark",nm:"Waypoint 369"},{la:40.58052,lo:13.57047,sp:"mark",nm:"Waypoint 370"},{la:40.58175,lo:13.57188,sp:"mark",nm:"Waypoint 371"},{la:40.58330,lo:13.58729,sp:"mark",nm:"Waypoint 372"},{la:40.57959,lo:13.59053,sp:"mark",nm:"Waypoint 373"},{la:40.57959,lo:13.61120,sp:"mark",nm:"Waypoint 374"},{la:40.55641,lo:13.62701,sp:"mark",nm:"Waypoint 375"},{la:40.59357,lo:13.76595,sp:"mark",nm:"Waypoint 376"},{la:40.56158,lo:13.58415,sp:"mark",nm:"Waypoint 377"},{la:40.57874,lo:13.54341,sp:"mark",nm:"Waypoint 378"},{la:40.63605,lo:13.64333,sp:"mark",nm:"Waypoint 379"},{la:40.61422,lo:13.44778,sp:"alalunga",nm:"Ala 240617"},{la:40.61149,lo:13.45362,sp:"alalunga",nm:"Ala2 240617"},{la:40.61561,lo:13.64140,sp:"mark",nm:"24 STR 1110"},{la:40.57782,lo:13.62870,sp:"mark",nm:"Fossa1"},{la:40.62769,lo:13.63621,sp:"mark",nm:"DoppioStr 090619"},{la:40.58745,lo:13.59274,sp:"alalunga",nm:"ALA 090619 9:40"},{la:40.53072,lo:13.66408,sp:"mark",nm:"ST1"},{la:40.67357,lo:13.61802,sp:"mark",nm:"V19-2"},{la:40.62748,lo:13.58514,sp:"tonno",nm:"Tonno Monel 1"}
+];
+const SPCOL={tonno:'#ff2d2d',alalunga:'#ff9a1f',spada:'#ff5bd0',foraggio:'#8cff3b',mark:'#b8c6d6'};
+const SPLBL={tonno:'Tonno',alalunga:'Alalunga',spada:'Pesce spada',foraggio:'Foraggio',mark:'Mark GPS'};
+/* ---- I TUOI punti (catch-log editabile, salvato sul telefono) ---- */
+let userPts=[]; try{ userPts=JSON.parse(localStorage.getItem('pescapoints_user')||'[]'); }catch(e){}
+function saveUser(){ try{ localStorage.setItem('pescapoints_user', JSON.stringify(userPts)); }catch(e){} }
+
+/* ---- MAPPA ---- */
+const ISCHIA=[40.62,13.60];
+const map=L.map('map',{zoomControl:false,attributionControl:true,tap:true}).setView(ISCHIA,11);
+const bases={
+  sat:L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'&copy; Esri, Maxar'}),
+  osm:L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap'})
+};
+let baseKey='sat'; bases.sat.addTo(map);
+const bathy=L.tileLayer.wms('https://ows.emodnet-bathymetry.eu/wms',{layers:'emodnet:mean_multicolour',format:'image/png',transparent:true,opacity:0.5,attribution:'&copy; EMODnet Bathymetry'});
+let bathyOn=false;
+
+/* ---- MARKER CATTURE ---- */
+const catchLayer=L.layerGroup().addTo(map);
+function drawCatch(){
+  catchLayer.clearLayers();
+  CATCH.forEach((c,i)=>{
+    const pel=(c.sp==='alalunga'||c.sp==='tonno'||c.sp==='spada');
+    L.circleMarker([c.la,c.lo],{radius:pel?7:4,color:'#08111f',weight:1,fillColor:SPCOL[c.sp]||'#b8c6d6',fillOpacity:.95,className:'catchMk'})
+      .addTo(catchLayer).on('click',()=>selectPoint('hist',i));
+  });
+  userPts.forEach((c,i)=>{   // i tuoi punti: cerchio con bordo bianco
+    L.circleMarker([c.la,c.lo],{radius:8,color:'#ffffff',weight:2,fillColor:SPCOL[c.sp]||'#8cff3b',fillOpacity:.95,className:'catchMk'})
+      .addTo(catchLayer).on('click',()=>selectPoint('user',i));
+  });
+}
+let catchOn=true; drawCatch();
+
+/* ---- ZONE CALDE (KDE pesata dei mark) ---- */
+const heatLayer=L.layerGroup(); let heatOn=false;
+function drawHeat(){
+  heatLayer.clearLayers();
+  const W={tonno:1,alalunga:1,spada:1,foraggio:.7,mark:.25};
+  const b=map.getBounds(), N=34, bw=0.028;
+  const cosLat=Math.cos(ISCHIA[0]*Math.PI/180);
+  let cells=[],dmax=0;
+  for(let a=0;a<N;a++)for(let k=0;k<N;k++){
+    const lat=b.getSouth()+(b.getNorth()-b.getSouth())*(a+.5)/N, lon=b.getWest()+(b.getEast()-b.getWest())*(k+.5)/N;
+    let d=0; for(const c of CATCH.concat(userPts)){const dl=c.la-lat,dg=(c.lo-lon)*cosLat,r2=(dl*dl+dg*dg)/(bw*bw); d+=(W[c.sp]||.25)*Math.exp(-.5*r2);}
+    if(d>dmax)dmax=d; cells.push([lat,lon,d]);
+  }
+  if(!dmax) return;
+  const cellLat=(b.getNorth()-b.getSouth())/N;
+  cells.forEach(([lat,lon,d])=>{ const t=d/dmax; if(t<.5) return;
+    const col=t>.8?'#ff2828':(t>.62?'#ff8c1e':'#ffe066');
+    L.circleMarker([lat,lon],{radius:9,color:'transparent',fillColor:col,fillOpacity:.10+.30*t,className:'catchMk'}).addTo(heatLayer);
+  });
+}
+
+/* ---- LUNA / SOLUNAR ---- */
+function moonInfo(dstr){
+  const d=new Date(dstr); if(isNaN(d.getTime())) return null;
+  const ref=Date.UTC(2000,0,6),syn=29.530588853;
+  let age=((d.getTime()-ref)/86400000)%syn; if(age<0)age+=syn;
+  const illum=Math.round((1-Math.cos(2*Math.PI*age/syn))/2*100);
+  let ph,emoji;
+  if(age<1.8||age>27.7){ph='Luna nuova';emoji='🌑';}
+  else if(age>12.9&&age<16.6){ph='Luna piena';emoji='🌕';}
+  else if(age<6.5){ph='Crescente';emoji='🌒';}
+  else if(age<8.5){ph='Primo quarto';emoji='🌓';}
+  else if(age<12.9){ph='Gibbosa cresc.';emoji='🌔';}
+  else if(age<20.2){ph='Gibbosa cal.';emoji='🌖';}
+  else if(age<23.9){ph='Ultimo quarto';emoji='🌗';}
+  else {ph='Calante';emoji='🌘';}
+  const spring=(age<2.8||age>26.7)||(Math.abs(age-14.77)<2.8);
+  return {age:age.toFixed(1),illum,ph,emoji,spring};
+}
+function todayStr(){const d=new Date(),p=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());}
+
+/* ---- BOTTOM SHEET ---- */
+const sheet=document.getElementById('sheet'), body=document.getElementById('sheetBody');
+let curTab='solunar', selDate=todayStr(), selIdx=-1, selT='hist';
+document.getElementById('grip').onclick=()=>sheet.classList.toggle('min');
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{curTab=t.dataset.tab;
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===t));
+  sheet.classList.remove('min'); render();});
+function selectPoint(t,i){ selT=t; selIdx=i; curTab='point';
+  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x.dataset.tab==='point'));
+  sheet.classList.remove('min'); render();
+  const c=(t==='user'?userPts:CATCH)[i]; if(c) map.panTo([c.la,c.lo]); }
+
+function render(){
+  if(curTab==='solunar'){
+    const m=moonInfo(selDate);
+    const spr=m.spring?'<span class="good">sizigia — marea forte, giorno favorevole</span>':'<span class="muted">quadratura — marea debole</span>';
+    body.innerHTML=
+      '<div class="row" style="margin:4px 0 8px"><input type="date" id="solDate" value="'+selDate+'"><div class="sp"></div><button class="tab" style="flex:none;padding:8px 12px" id="solToday">Oggi</button></div>'+
+      '<div class="card"><div class="row"><div style="font-size:40px;margin-right:6px">'+m.emoji+'</div><div><div class="big">'+m.illum+'%</div><div class="lbl">'+m.ph+' &middot; '+m.age+' giorni</div></div></div><div style="margin-top:8px">'+spr+'</div></div>'+
+      '<div class="card"><div class="lbl">Finestra oraria favorevole</div><div class="big" style="font-size:20px">09:00 – 14:00 <span class="muted" style="font-size:14px">(picco ~11:00)</span></div><div class="muted">ripresa 15:00 – 17:00</div><div class="hint">Dalle catture storiche di alalunga (26 orari; luna su 6 date). <b>Ipotesi da validare</b>, non regola certa.</div></div>'+
+      '<div class="card"><div class="lbl">Regola zona</div>Qui i pelagici si prendono <b>sempre negli stessi punti</b>: attiva 🔥 <b>Zone calde</b> per vederli. I modelli meteo-marini non li predicono — contano i <b>tuoi mark</b>.</div>';
+    const di=document.getElementById('solDate'); if(di) di.onchange=e=>{selDate=e.target.value;render();};
+    const bt=document.getElementById('solToday'); if(bt) bt.onclick=()=>{selDate=todayStr();render();};
+  } else if(curTab==='point'){
+    if(selIdx<0){ body.innerHTML='<div class="card muted">Tocca un punto sulla mappa, oppure premi ➕ (o tieni premuto sulla mappa) per aggiungere un tuo punto.</div>'; return; }
+    if(selT==='user'){
+      const c=userPts[selIdx];
+      const opts=['alalunga','tonno','spada','foraggio','mark'].map(s=>'<option value="'+s+'"'+(c.sp===s?' selected':'')+'>'+SPLBL[s]+'</option>').join('');
+      body.innerHTML='<div class="card"><div class="lbl" style="color:#7ff0ad">★ Il tuo punto</div>'+
+        '<div class="row" style="margin:8px 0"><span>Specie</span><div class="sp"></div><select id="epSp" style="background:#11243c;border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:7px 8px;font-size:14px">'+opts+'</select></div>'+
+        '<input id="epNm" value="'+esc(c.nm)+'" placeholder="nome / nota" style="width:100%;background:#11243c;border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px;font-size:15px">'+
+        '<div class="muted" style="margin-top:6px">'+c.la.toFixed(5)+', '+c.lo.toFixed(5)+'</div>'+
+        '<div style="margin-top:10px"><span class="pill" style="background:#1c5a3a;border-color:#2c8a5a" id="epSave">💾 Salva</span><span class="pill" onclick="navTo2('+c.la+','+c.lo+')">🧭 Vai qui</span><span class="pill" style="background:#3a1a1a;border-color:#6c2c2c" id="epDel">🗑 Elimina</span></div></div>';
+      document.getElementById('epSave').onclick=()=>{ c.sp=document.getElementById('epSp').value; c.nm=(document.getElementById('epNm').value||'Punto').trim(); saveUser(); drawCatch(); if(heatOn)drawHeat(); render(); };
+      document.getElementById('epDel').onclick=()=>{ userPts.splice(selIdx,1); saveUser(); selIdx=-1; drawCatch(); if(heatOn)drawHeat(); render(); };
+    } else {
+      const c=CATCH[selIdx];
+      body.innerHTML='<div class="card"><div class="row"><span class="dot" style="background:'+(SPCOL[c.sp])+'"></span><b>'+SPLBL[c.sp]+'</b><div class="sp"></div><span class="muted">storico #'+(selIdx+1)+'</span></div>'+
+        '<div style="margin-top:8px;font-size:17px">'+esc(c.nm)+'</div>'+
+        '<div class="muted" style="margin-top:6px">'+c.la.toFixed(5)+', '+c.lo.toFixed(5)+'</div>'+
+        '<div style="margin-top:8px"><span class="pill" onclick="navTo2('+c.la+','+c.lo+')">🧭 Vai qui</span><span class="pill" onclick="map.setView(['+c.la+','+c.lo+'],14)">🔍 Zoom</span></div></div>';
+    }
+  } else {
+    let h='';
+    if(userPts.length){ h+='<div class="lbl" style="margin-top:4px;color:#7ff0ad">★ I tuoi punti ('+userPts.length+')</div>';
+      userPts.forEach((c,i)=>{ h+='<div class="card" style="padding:8px 12px;margin:5px 0" onclick="selectPoint(\'user\','+i+')"><div class="row"><span class="dot" style="background:'+(SPCOL[c.sp]||'#8cff3b')+';box-shadow:0 0 0 2px #fff"></span>'+esc(c.nm)+'<div class="sp"></div><span class="muted">›</span></div></div>'; }); }
+    const groups={}; CATCH.forEach((c,i)=>{(groups[c.sp]=groups[c.sp]||[]).push(i);});
+    ['tonno','alalunga','spada','foraggio','mark'].forEach(sp=>{ if(!groups[sp])return;
+      h+='<div class="lbl" style="margin-top:8px"><span class="dot" style="background:'+SPCOL[sp]+'"></span> '+SPLBL[sp]+' ('+groups[sp].length+')</div>';
+      groups[sp].slice(0,60).forEach(i=>{ h+='<div class="card" style="padding:8px 12px;margin:5px 0" onclick="selectPoint(\'hist\','+i+')"><div class="row">'+esc(CATCH[i].nm)+'<div class="sp"></div><span class="muted">›</span></div></div>'; });
+    });
+    body.innerHTML=h;
+  }
+}
+function navTo2(la,lo){window.open('https://www.google.com/maps/dir/?api=1&destination='+la+','+lo,'_blank');}
+
+/* ---- FAB ---- */
+document.getElementById('btnBase').onclick=()=>{ map.removeLayer(bases[baseKey]); baseKey=baseKey==='sat'?'osm':'sat'; bases[baseKey].addTo(map); if(bathyOn)bathy.bringToFront(); };
+document.getElementById('btnBathy').onclick=e=>{ bathyOn=!bathyOn; if(bathyOn){bathy.addTo(map);} else map.removeLayer(bathy); e.currentTarget.style.background=bathyOn?'#173a5c':'#0d2137e6'; };
+document.getElementById('btnCatch').onclick=e=>{ catchOn=!catchOn; if(catchOn){drawCatch();catchLayer.addTo(map);} else map.removeLayer(catchLayer); e.currentTarget.style.background=catchOn?'#173a5c':'#0d2137e6'; };
+document.getElementById('btnCatch').style.background='#173a5c';
+document.getElementById('btnHeat').onclick=e=>{ heatOn=!heatOn; if(heatOn){drawHeat();heatLayer.addTo(map);} else map.removeLayer(heatLayer); e.currentTarget.style.background=heatOn?'#173a5c':'#0d2137e6';
+  document.getElementById('legend').style.display=heatOn?'block':'none';
+  document.getElementById('legend').innerHTML='🔥 Zone calde: densità dei tuoi mark (giallo→rosso)'; };
+map.on('moveend',()=>{ if(heatOn) drawHeat(); });
+let watchId=null;
+document.getElementById('btnLocate').onclick=()=>{ if(!navigator.geolocation){alert('GPS non disponibile');return;}
+  navigator.geolocation.getCurrentPosition(p=>{ const ll=[p.coords.latitude,p.coords.longitude];
+    L.circleMarker(ll,{radius:7,color:'#fff',weight:2,fillColor:'#22c8ff',fillOpacity:1}).addTo(map); map.setView(ll,13); },
+    ()=>alert('Posizione non ottenuta'),{enableHighAccuracy:true,timeout:8000}); };
+/* aggiungi un tuo punto: FAB ➕ (al centro mappa) o long-press/tasto destro sulla mappa */
+function addUserPoint(latlng){
+  userPts.push({la:+(+latlng.lat).toFixed(5), lo:+(+latlng.lng).toFixed(5), sp:'mark', nm:'Nuovo punto'});
+  saveUser();
+  if(!catchOn){ catchOn=true; catchLayer.addTo(map); document.getElementById('btnCatch').style.background='#173a5c'; }
+  drawCatch(); if(heatOn) drawHeat();
+  selectPoint('user', userPts.length-1);
+}
+document.getElementById('btnAdd').onclick=()=>addUserPoint(map.getCenter());
+map.on('contextmenu', e=>addUserPoint(e.latlng));
+
+render();
+/* service worker */
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('sw.js').catch(()=>{}); }
+</script>
+</body>
+</html>

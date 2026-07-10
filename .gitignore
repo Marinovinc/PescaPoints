@@ -1,0 +1,4 @@
+# dev-only e artefatti di test (tutto ciò che inizia con _)
+_*
+.DS_Store
+Thumbs.db
