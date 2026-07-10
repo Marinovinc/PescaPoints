@@ -140,10 +140,30 @@ function drawCatch(){
 }
 let catchOn=true; drawCatch();
 
+/* ---- AREA DI PESCA (bounding box delle catture, con margine) - usata per delimitare gli hot spot pubblici ---- */
+const CATCHBB=(()=>{ let s=90,n=-90,w=180,e=-180;
+  CATCH.forEach(c=>{ s=Math.min(s,c.la); n=Math.max(n,c.la); w=Math.min(w,c.lo); e=Math.max(e,c.lo); });
+  const m=0.02; return {s:s-m,n:n+m,w:w-m,e:e+m}; })();
+/* ---- ZONE PUBBLICHE SFOCATE: raggruppa le catture reali in aree larghe ~1 km (area giusta, NON i punti esatti) ---- */
+function publicZones(){
+  const cell=0.03, wSp={tonno:2,alalunga:2,spada:2,foraggio:1,mark:1}, bins={};
+  CATCH.forEach(c=>{ const k=Math.round(c.la/cell)+'_'+Math.round(c.lo/cell);
+    const b=bins[k]||(bins[k]={sla:0,slo:0,n:0,w:0}); b.sla+=c.la; b.slo+=c.lo; b.n++; b.w+=(wSp[c.sp]||1); });
+  return Object.values(bins).filter(b=>b.n>=2)   // almeno 2 catture -> zona (evita di rivelare punti isolati)
+    .map(b=>({ la:Math.round(b.sla/b.n/0.01)*0.01, lo:Math.round(b.slo/b.n/0.01)*0.01, n:b.n, w:b.w }))  // centroide arrotondato a ~1 km
+    .sort((a,b)=>b.w-a.w).slice(0,6);
+}
 /* ---- ZONE CALDE (KDE pesata dei mark) ---- */
 const heatLayer=L.layerGroup(); let heatOn=false;
 function drawHeat(){
   heatLayer.clearLayers();
+  if(PUBLIC){   // versione pubblica: zone larghe e sfocate dalle catture reali - stessa AREA di 8098/8099, senza i waypoint esatti
+    publicZones().forEach(z=>{
+      L.circle([z.la,z.lo],{radius:1100,color:'#ff8c1a',weight:2,opacity:.9,fillColor:'#ff8c1a',fillOpacity:.14,dashArray:'5 4',className:'catchMk'})
+        .addTo(heatLayer).bindPopup('<b>Zona di pesca</b><br><span style="color:#9fb4c9;font-size:12px">Area indicativa (sfocata ~1 km) dai dati storici. Non è un punto esatto.</span>');
+    });
+    return;
+  }
   const W={tonno:1,alalunga:1,spada:1,foraggio:.7,mark:.25};
   const b=map.getBounds(), N=34, bw=0.028;
   const cosLat=Math.cos(ISCHIA[0]*Math.PI/180);
@@ -318,7 +338,11 @@ function drawSpot(sp){
 let spotBusy=false;
 async function computeHotSpots(){
   if(spotBusy) return; spotBusy=true;
-  const b=map.getBounds(), latS=b.getSouth(),latN=b.getNorth(),lonW=b.getWest(),lonE=b.getEast();
+  const b=map.getBounds(); let latS=b.getSouth(),latN=b.getNorth(),lonW=b.getWest(),lonE=b.getEast();
+  if(PUBLIC){   // limita gli hot spot all'area di pesca reale (niente scarpate a nord/ovest fuori zona)
+    latS=Math.max(latS,CATCHBB.s); latN=Math.min(latN,CATCHBB.n); lonW=Math.max(lonW,CATCHBB.w); lonE=Math.min(lonE,CATCHBB.e);
+    if(latN-latS<0.01||lonE-lonW<0.01){ toast('Sposta la vista sull\'area di pesca (SW di Ischia) per gli hot spot.'); spotBusy=false; return; }
+  }
   if(Math.max(latN-latS,lonE-lonW)>0.9){ toast('Zooma di più: area troppo grande per proporre hot spot.'); spotBusy=false; return; }
   toast('Analizzo la struttura del fondale…', 8000);
   try{
@@ -354,7 +378,7 @@ function render(){
       '<div class="card"><div class="row"><div style="font-size:40px;margin-right:6px">'+m.emoji+'</div><div><div class="big">'+m.illum+'%</div><div class="lbl">'+m.ph+' &middot; '+m.age+' giorni</div></div></div><div style="margin-top:8px">'+spr+'</div></div>'+
       '<div class="card" id="fcstCard"><div class="lbl">Finestre di pesca — prossimi 7 giorni <span class="muted">(stima)</span></div><div id="fcstBody" class="muted" style="margin-top:6px">Carico meteo…</div><div class="hint">Stima pesata: solunar (alba/tramonto/transito luna) 40%, fase luna 22%, pressione 22%, vento 16%. Meteo reale Open-Meteo. <b>Non è una certezza</b>, è un aiuto alla scelta.</div></div>'+
       (PUBLIC
-        ? '<div class="card"><div class="lbl">Hot spot dell\'area</div>Premi 🎯 per proporre i punti su <b>scarpate e secche</b> del fondale nell\'area inquadrata: è dove la conformazione concentra foraggio e predatori. <b>Suggerimenti dalla struttura</b>, non catture garantite.</div>'
+        ? '<div class="card"><div class="lbl">Zone e hot spot</div>🔥 <b>Zone di pesca</b>: aree indicative (sfocate) dove storicamente si prende. 🎯 <b>Hot spot</b>: scarpate e secche del fondale dentro l\'area, calcolate dalla batimetria. Sono <b>indicazioni</b>, non catture garantite.</div>'
         : '<div class="card"><div class="lbl">Regola zona</div>Qui i pelagici si prendono <b>sempre negli stessi punti</b>: attiva 🔥 <b>Zone calde</b> per vederli. I modelli meteo-marini non li predicono — contano i <b>tuoi mark</b>. Premi 🎯 per gli hot spot di struttura.</div>');
     const di=document.getElementById('solDate'); if(di) di.onchange=e=>{selDate=e.target.value;render();};
     const bt=document.getElementById('solToday'); if(bt) bt.onclick=()=>{selDate=todayStr();render();};
@@ -405,7 +429,7 @@ document.getElementById('btnCatch').style.background='#173a5c';
 document.getElementById('btnBathy').style.background='#173a5c';
 document.getElementById('btnHeat').onclick=e=>{ heatOn=!heatOn; if(heatOn){drawHeat();heatLayer.addTo(map);} else map.removeLayer(heatLayer); e.currentTarget.style.background=heatOn?'#173a5c':'#0d2137e6';
   document.getElementById('legend').style.display=heatOn?'block':'none';
-  document.getElementById('legend').innerHTML='🔥 Zone calde: densità dei tuoi mark (giallo→rosso)'; };
+  document.getElementById('legend').innerHTML=PUBLIC?'🔥 Zone di pesca (aree indicative, sfocate)':'🔥 Zone calde: densità dei tuoi mark (giallo→rosso)'; };
 map.on('moveend',()=>{ if(heatOn) drawHeat(); });
 document.getElementById('btnSpot').onclick=()=>computeHotSpots();
 let watchId=null, meMarker=null, meCircle=null, meCentered=false;
@@ -438,8 +462,14 @@ document.getElementById('btnAdd').onclick=()=>addUserPoint(map.getCenter());
 map.on('contextmenu', e=>addUserPoint(e.latlng));
 
 render();
-/* versione pubblica: proponi subito gli hot spot per l'area iniziale */
-if(PUBLIC){ map.whenReady(()=>setTimeout(computeHotSpots, 900)); }
+/* versione pubblica: mostra le zone (sfocate) dalle catture reali + hot spot di struttura ristretti all'area */
+if(PUBLIC){
+  heatOn=true; drawHeat(); heatLayer.addTo(map);
+  document.getElementById('btnHeat').style.background='#173a5c';
+  const lg=document.getElementById('legend'); lg.style.display='block';
+  lg.innerHTML='🔥 Zone di pesca (aree indicative) &middot; 🎯 struttura del fondale';
+  map.whenReady(()=>setTimeout(computeHotSpots, 900));
+}
 /* service worker */
 if('serviceWorker' in navigator){ navigator.serviceWorker.register('sw.js').catch(()=>{}); }
 </script>
