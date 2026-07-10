@@ -61,7 +61,7 @@
 <div id="tools">
   <div class="fab" id="btnLocate" title="La mia posizione">◎</div>
   <div class="fab" id="btnBase" title="Cambia sfondo">🛰</div>
-  <div class="fab" id="btnBathy" title="Batimetria">≈</div>
+  <div class="fab" id="btnBathy" title="Carta nautica (isobate + segnalamenti)">≈</div>
   <div class="fab" id="btnCatch" title="Catture">🐟</div>
   <div class="fab" id="btnHeat" title="Zone calde">🔥</div>
   <div class="fab" id="btnAdd" title="Aggiungi un tuo punto" style="background:#1c5a3a;border-color:#2c8a5a">➕</div>
@@ -99,17 +99,23 @@ function saveUser(){ try{ localStorage.setItem('pescapoints_user', JSON.stringif
 /* ---- MAPPA ---- */
 const ISCHIA=[40.62,13.60];
 const map=L.map('map',{zoomControl:false,attributionControl:true,tap:true}).setView(ISCHIA,11);
-map.createPane('bathy'); map.getPane('bathy').style.zIndex=250;
-map.getPane('bathy').style.filter='brightness(1.15) contrast(1.05)';   // overlay batimetrico piu' leggibile quando attivo
+// fondale a RILIEVO OMBREGGIATO di EMODnet (stesse cartine della app 3D 8098), in pane filtrato -> luminoso, non colorato
+map.createPane('relief'); map.getPane('relief').style.zIndex=200;
+map.getPane('relief').style.filter='saturate(0.72) contrast(1.12) brightness(1.06)';
+map.createPane('chart'); map.getPane('chart').style.zIndex=260;
+const emodRelief=L.tileLayer('https://tiles.emodnet-bathymetry.eu/2020/baselayer/web_mercator/{z}/{x}/{y}.png',{maxZoom:19,maxNativeZoom:14,pane:'relief',attribution:'&copy; EMODnet Bathymetry'});
 const bases={
-  ocean:L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,maxNativeZoom:13,attribution:'&copy; Esri, GEBCO, NOAA, National Geographic'}),
-  sat:L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'&copy; Esri, Maxar'}),
-  osm:L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap'})
+  mare: emodRelief,
+  sat:  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'&copy; Esri, Maxar'}),
+  osm:  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap'})
 };
-// base di default: fondale a rilievo ombreggiato chiaro (non colorato) -> i rilievi si riconoscono meglio
-let baseKey='ocean'; bases.ocean.addTo(map);
-const bathy=L.tileLayer.wms('https://ows.emodnet-bathymetry.eu/wms',{layers:'emodnet:mean_multicolour',format:'image/png',transparent:true,opacity:0.55,pane:'bathy',attribution:'&copy; EMODnet Bathymetry'});
-let bathyOn=false;   // batimetria colorata EMODnet: overlay OPZIONALE (OFF di default), la base Ocean gia' mostra i rilievi
+let baseKey='mare'; emodRelief.addTo(map);   // default: fondale a rilievo EMODnet (luminoso, non arcobaleno)
+// CARTA NAUTICA (come 8098): isobate EMODnet + segnalamenti OpenSeaMap (da zoom 11)
+const chart=L.layerGroup([
+  L.tileLayer.wms('https://ows.emodnet-bathymetry.eu/wms',{layers:'emodnet:contours',format:'image/png',transparent:true,opacity:0.85,pane:'chart',attribution:'&copy; EMODnet Bathymetry'}),
+  L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png',{minZoom:11,maxZoom:18,pane:'chart',attribution:'&copy; OpenSeaMap'})
+]);
+let bathyOn=true; chart.addTo(map);   // carta nautica ON di default
 
 /* ---- MARKER CATTURE ---- */
 const catchLayer=L.layerGroup().addTo(map);
@@ -303,11 +309,12 @@ function render(){
 function navTo2(la,lo){window.open('https://www.google.com/maps/dir/?api=1&destination='+la+','+lo,'_blank');}
 
 /* ---- FAB ---- */
-const baseOrder=['ocean','sat','osm'];
-document.getElementById('btnBase').onclick=()=>{ map.removeLayer(bases[baseKey]); baseKey=baseOrder[(baseOrder.indexOf(baseKey)+1)%baseOrder.length]; bases[baseKey].addTo(map); if(bathyOn)bathy.bringToFront(); };
-document.getElementById('btnBathy').onclick=e=>{ bathyOn=!bathyOn; if(bathyOn){bathy.addTo(map);} else map.removeLayer(bathy); e.currentTarget.style.background=bathyOn?'#173a5c':'#0d2137e6'; };
+const baseOrder=['mare','sat','osm'];
+document.getElementById('btnBase').onclick=()=>{ map.removeLayer(bases[baseKey]); baseKey=baseOrder[(baseOrder.indexOf(baseKey)+1)%baseOrder.length]; bases[baseKey].addTo(map); };
+document.getElementById('btnBathy').onclick=e=>{ bathyOn=!bathyOn; if(bathyOn){chart.addTo(map);} else map.removeLayer(chart); e.currentTarget.style.background=bathyOn?'#173a5c':'#0d2137e6'; };
 document.getElementById('btnCatch').onclick=e=>{ catchOn=!catchOn; if(catchOn){drawCatch();catchLayer.addTo(map);} else map.removeLayer(catchLayer); e.currentTarget.style.background=catchOn?'#173a5c':'#0d2137e6'; };
 document.getElementById('btnCatch').style.background='#173a5c';
+document.getElementById('btnBathy').style.background='#173a5c';
 document.getElementById('btnHeat').onclick=e=>{ heatOn=!heatOn; if(heatOn){drawHeat();heatLayer.addTo(map);} else map.removeLayer(heatLayer); e.currentTarget.style.background=heatOn?'#173a5c':'#0d2137e6';
   document.getElementById('legend').style.display=heatOn?'block':'none';
   document.getElementById('legend').innerHTML='🔥 Zone calde: densità dei tuoi mark (giallo→rosso)'; };
