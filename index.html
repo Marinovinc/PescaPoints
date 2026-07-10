@@ -336,6 +336,16 @@ function rankSpots(g){
   return picked;
 }
 function spotNav(la,lo){ navTo2(la,lo); return false; }
+/* coordinate per il navigatore di bordo: decimale + gradi-minuti (DDM, formato tipico dei plotter marini) */
+function ddm(v,pos,neg){ const h=v<0?neg:pos; v=Math.abs(v); const d=Math.floor(v); return d+'°'+((v-d)*60).toFixed(3)+"'"+h; }
+function coordHtml(la,lo){
+  return '<div style="font-family:monospace;font-size:13px;color:#eaf2fa;margin:4px 0 2px;-webkit-user-select:all;user-select:all">'+la.toFixed(5)+', '+lo.toFixed(5)+'</div>'+
+    '<div style="font-family:monospace;font-size:12px;color:#9fb4c9;-webkit-user-select:all;user-select:all">'+ddm(la,'N','S')+'  '+ddm(lo,'E','W')+'</div>';
+}
+function spotCopy(la,lo){ const t=la.toFixed(5)+', '+lo.toFixed(5);
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(t).then(()=>toast('Coordinate copiate: '+t)).catch(()=>toast('Coordinate: '+t)); }
+  else toast('Coordinate: '+t);
+  return false; }
 /* --- punti suggeriti MEMORIZZATI (fascia ~1000 m + struttura): salvati su localStorage e mostrati a OGNI zoom --- */
 function addSpots(arr){ let added=0;
   for(const s of arr){ if(savedSpots.length>=400) break;
@@ -358,9 +368,12 @@ function drawSpots(){
     L.circleMarker([sp.la,sp.lo],{radius:9,color:'#ffffff',weight:2.5,fillColor:col,fillOpacity:1,className:'catchMk'})
       .addTo(spotLayer)
       .bindPopup('<b>'+label+'</b><br>Prof. ~'+Math.abs(Math.round(sp.z))+' m'+(sp.slope!=null?' &middot; pendenza '+Math.round(sp.slope*100)+'%':'')+
-        '<br><span style="color:#9fb4c9;font-size:12px">Suggerito, non cattura garantita.</span>'+
-        '<br><a href="#" style="color:#8df0ff" onclick="return spotNav('+sp.la.toFixed(5)+','+sp.lo.toFixed(5)+')">🧭 Vai</a> &middot; '+
-        '<a href="#" style="color:#ff9a9a" onclick="return delSpot('+sp.la.toFixed(5)+','+sp.lo.toFixed(5)+')">🗑 togli</a>');
+        coordHtml(sp.la,sp.lo)+
+        '<div style="margin-top:6px">'+
+        '<a href="#" style="color:#8df0ff" onclick="return spotCopy('+sp.la.toFixed(5)+','+sp.lo.toFixed(5)+')">📋 copia coord.</a> &middot; '+
+        '<a href="#" style="color:#8df0ff" onclick="return spotNav('+sp.la.toFixed(5)+','+sp.lo.toFixed(5)+')">🧭 Vai</a> &middot; '+
+        '<a href="#" style="color:#ff9a9a" onclick="return delSpot('+sp.la.toFixed(5)+','+sp.lo.toFixed(5)+')">🗑 togli</a></div>'+
+        '<div style="color:#9fb4c9;font-size:11px;margin-top:4px">Suggerito, non cattura garantita.</div>');
   });
 }
 let spotBusy=false;
