@@ -100,14 +100,16 @@ function saveUser(){ try{ localStorage.setItem('pescapoints_user', JSON.stringif
 const ISCHIA=[40.62,13.60];
 const map=L.map('map',{zoomControl:false,attributionControl:true,tap:true}).setView(ISCHIA,11);
 map.createPane('bathy'); map.getPane('bathy').style.zIndex=250;
-map.getPane('bathy').style.filter='brightness(1.45) contrast(1.15) saturate(1.4)';   // fondale piu' luminoso -> rilievi piu' leggibili
+map.getPane('bathy').style.filter='brightness(1.15) contrast(1.05)';   // overlay batimetrico piu' leggibile quando attivo
 const bases={
+  ocean:L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,maxNativeZoom:13,attribution:'&copy; Esri, GEBCO, NOAA, National Geographic'}),
   sat:L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'&copy; Esri, Maxar'}),
   osm:L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap'})
 };
-let baseKey='sat'; bases.sat.addTo(map);
-const bathy=L.tileLayer.wms('https://ows.emodnet-bathymetry.eu/wms',{layers:'emodnet:mean_multicolour',format:'image/png',transparent:true,opacity:0.72,pane:'bathy',attribution:'&copy; EMODnet Bathymetry'});
-let bathyOn=true; bathy.addTo(map);   // batimetria ON di default (fondale luminoso)
+// base di default: fondale a rilievo ombreggiato chiaro (non colorato) -> i rilievi si riconoscono meglio
+let baseKey='ocean'; bases.ocean.addTo(map);
+const bathy=L.tileLayer.wms('https://ows.emodnet-bathymetry.eu/wms',{layers:'emodnet:mean_multicolour',format:'image/png',transparent:true,opacity:0.55,pane:'bathy',attribution:'&copy; EMODnet Bathymetry'});
+let bathyOn=false;   // batimetria colorata EMODnet: overlay OPZIONALE (OFF di default), la base Ocean gia' mostra i rilievi
 
 /* ---- MARKER CATTURE ---- */
 const catchLayer=L.layerGroup().addTo(map);
@@ -223,20 +225,33 @@ function render(){
 function navTo2(la,lo){window.open('https://www.google.com/maps/dir/?api=1&destination='+la+','+lo,'_blank');}
 
 /* ---- FAB ---- */
-document.getElementById('btnBase').onclick=()=>{ map.removeLayer(bases[baseKey]); baseKey=baseKey==='sat'?'osm':'sat'; bases[baseKey].addTo(map); if(bathyOn)bathy.bringToFront(); };
+const baseOrder=['ocean','sat','osm'];
+document.getElementById('btnBase').onclick=()=>{ map.removeLayer(bases[baseKey]); baseKey=baseOrder[(baseOrder.indexOf(baseKey)+1)%baseOrder.length]; bases[baseKey].addTo(map); if(bathyOn)bathy.bringToFront(); };
 document.getElementById('btnBathy').onclick=e=>{ bathyOn=!bathyOn; if(bathyOn){bathy.addTo(map);} else map.removeLayer(bathy); e.currentTarget.style.background=bathyOn?'#173a5c':'#0d2137e6'; };
 document.getElementById('btnCatch').onclick=e=>{ catchOn=!catchOn; if(catchOn){drawCatch();catchLayer.addTo(map);} else map.removeLayer(catchLayer); e.currentTarget.style.background=catchOn?'#173a5c':'#0d2137e6'; };
 document.getElementById('btnCatch').style.background='#173a5c';
-document.getElementById('btnBathy').style.background='#173a5c';
 document.getElementById('btnHeat').onclick=e=>{ heatOn=!heatOn; if(heatOn){drawHeat();heatLayer.addTo(map);} else map.removeLayer(heatLayer); e.currentTarget.style.background=heatOn?'#173a5c':'#0d2137e6';
   document.getElementById('legend').style.display=heatOn?'block':'none';
   document.getElementById('legend').innerHTML='🔥 Zone calde: densità dei tuoi mark (giallo→rosso)'; };
 map.on('moveend',()=>{ if(heatOn) drawHeat(); });
-let watchId=null;
-document.getElementById('btnLocate').onclick=()=>{ if(!navigator.geolocation){alert('GPS non disponibile');return;}
-  navigator.geolocation.getCurrentPosition(p=>{ const ll=[p.coords.latitude,p.coords.longitude];
-    L.circleMarker(ll,{radius:7,color:'#fff',weight:2,fillColor:'#22c8ff',fillOpacity:1}).addTo(map); map.setView(ll,13); },
-    ()=>alert('Posizione non ottenuta'),{enableHighAccuracy:true,timeout:8000}); };
+let watchId=null, meMarker=null, meCircle=null, meCentered=false;
+function showMe(p){ const ll=[p.coords.latitude,p.coords.longitude], acc=Math.max(0,p.coords.accuracy||0);
+  if(!meMarker){
+    meCircle=L.circle(ll,{radius:acc,color:'#22c8ff',weight:1,opacity:.6,fillColor:'#22c8ff',fillOpacity:.12}).addTo(map);
+    meMarker=L.circleMarker(ll,{radius:7,color:'#fff',weight:2,fillColor:'#22c8ff',fillOpacity:1}).addTo(map);
+  } else { meMarker.setLatLng(ll); meCircle.setLatLng(ll).setRadius(acc); }
+  meMarker.bindTooltip('La tua posizione (±'+Math.round(acc)+' m)');
+  if(!meCentered){ meCentered=true; map.setView(ll, acc>1000?11:15); }
+}
+document.getElementById('btnLocate').onclick=()=>{
+  if(!navigator.geolocation){alert('GPS non disponibile su questo browser');return;}
+  meCentered=false;
+  // fix immediato fresco (no cache) + tracking continuo
+  navigator.geolocation.getCurrentPosition(showMe,
+    e=>alert('Posizione non ottenuta: '+e.message+'.\nNota: su PC/desktop la posizione è stimata dalla rete/IP e può essere molto imprecisa; su cellulare col GPS attivo è precisa.'),
+    {enableHighAccuracy:true,timeout:12000,maximumAge:0});
+  if(watchId==null) watchId=navigator.geolocation.watchPosition(showMe,()=>{},{enableHighAccuracy:true,maximumAge:1000,timeout:15000});
+};
 /* aggiungi un tuo punto: FAB ➕ (al centro mappa) o long-press/tasto destro sulla mappa */
 function addUserPoint(latlng){
   userPts.push({la:+(+latlng.lat).toFixed(5), lo:+(+latlng.lng).toFixed(5), sp:'mark', nm:'Nuovo punto'});
